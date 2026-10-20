@@ -1,6 +1,47 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>来访者登记 · 人格测评</title><link rel="stylesheet" href="/_nest/hr.css"><script src="/_nest/hr.js" defer></script></head><body>
-<header class="top"><a class="brand" href="/">◈ <span>人格测评</span></a><div id="account" hidden><span id="account-name"></span><button id="logout" class="quiet">退出登录</button></div><span id="secure-label">企业访问入口</span></header>
-<main class="layout"><section class="intro"><span class="eyebrow">VISITOR ASSESSMENT</span><h1>从一次了解，<br>开始更好的相遇。</h1><p>登记来访者信息，生成专属邀请。<br>让测评结果与每一位来访者准确关联。</p><div class="facts"><div><b>72 小时</b><span>邀请有效期</span></div><div><b>专属链接</b><span>每次登记独立生成</span></div><div><b>自动回传</b><span>信息与结果进入钉钉</span></div></div><div class="orbit" aria-hidden="true"><i></i><i></i><i></i><span>O</span><span>C</span><span>E</span><span>A</span><span>N</span><b>看见<br>更多可能</b></div></section>
-<section class="card"><div id="loading" class="loading">正在检查企业登录状态…</div><div id="login" hidden><span class="tag">企业身份认证</span><h2>欢迎回来</h2><p class="muted">使用本企业钉钉账号登录后，<br>即可为来访者创建测评邀请。</p><a id="login-link" class="primary" href="/auth/dingtalk/start">使用钉钉登录 <span>↗</span></a><p class="footnote">账号登录与扫码授权由钉钉官方提供</p></div>
-<form id="registration" hidden><span class="tag">创建测评邀请</span><h2>来访者登记</h2><p class="muted">仅需两项信息，即可生成专属测评链接。</p><label for="name">姓名 <span>*</span></label><input id="name" name="name" maxlength="80" placeholder="请输入来访者姓名" autocomplete="off" required><label for="phone">联系电话 <span>*</span></label><div class="phone-field"><span>+86</span><input id="phone" name="phone" type="tel" inputmode="tel" maxlength="20" placeholder="请输入 11 位手机号" autocomplete="off" required></div><button id="create" class="primary" type="submit">生成专属测评链接 <span>→</span></button><p class="footnote">姓名与电话加密关联，来访者无需再次填写</p></form>
-<div id="issued" hidden><span class="tag">邀请已就绪</span><h2>把这次了解，<br>交给来访者。</h2><p class="muted">复制下方完整链接，发送给对应来访者。</p><label for="invite-url">专属测评链接</label><textarea id="invite-url" readonly rows="4" spellcheck="false"></textarea><p id="expiry" class="expiry"></p><button id="copy" class="primary">复制完整链接 <span>↗</span></button><button id="another" class="secondary">登记下一位来访者</button></div><p id="message" role="status" hidden></p></section></main><footer>每一次登记，对应一份独立测评。</footer></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>来访者登记 · 人格测评</title>
+  <link rel="stylesheet" href="/_nest/hr.css">
+  <script src="/_nest/hr.js" defer></script>
+</head>
+<body>
+  <main class="card" aria-label="人格测评登记">
+    <div id="account" hidden><span id="account-name"></span><button id="logout" class="quiet">退出登录</button></div>
+    <div id="loading" class="loading" role="status">正在检查登录状态…</div>
+    <section id="login" hidden>
+      <div class="app-mark" aria-hidden="true">测</div>
+      <h1>人格测评登记</h1>
+      <p class="muted">使用企业钉钉账号登录</p>
+      <a id="login-link" class="login-entry" href="/auth/dingtalk/start">
+        <span class="login-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 8V5a1 1 0 0 1 1-1h3m8 0h3a1 1 0 0 1 1 1v3M4 16v3a1 1 0 0 0 1 1h3m8 0h3a1 1 0 0 0 1-1v-3M8 8h3v3H8zm5 0h3v3h-3zm-5 5h3v3H8zm5 0h3v3h-3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></span>
+        <strong>点击前往钉钉登录</strong>
+        <span class="login-detail">支持账号登录或扫码授权</span>
+      </a>
+      <p class="footnote">授权完成后自动返回登记页面</p>
+    </section>
+    <form id="registration" hidden>
+      <h2>来访者登记</h2>
+      <p class="muted">填写姓名和电话，生成专属测评链接。</p>
+      <label for="name">姓名 <span>*</span></label>
+      <input id="name" name="name" maxlength="80" placeholder="请输入来访者姓名" autocomplete="off" required>
+      <label for="phone">联系电话 <span>*</span></label>
+      <div class="phone-field"><span>+86</span><input id="phone" name="phone" type="tel" inputmode="tel" maxlength="20" placeholder="请输入 11 位手机号" autocomplete="off" required></div>
+      <button id="create" class="primary" type="submit">生成专属测评链接 <span>→</span></button>
+      <p class="footnote">姓名与电话加密关联，来访者无需再次填写</p>
+    </form>
+    <section id="issued" hidden>
+      <h2>测评链接已生成</h2>
+      <p class="muted">复制完整链接，发送给对应来访者。</p>
+      <label for="invite-url">专属测评链接</label>
+      <textarea id="invite-url" readonly rows="4" spellcheck="false"></textarea>
+      <p id="expiry" class="expiry"></p>
+      <button id="copy" class="primary">复制完整链接 <span>↗</span></button>
+      <button id="another" class="secondary">登记下一位来访者</button>
+    </section>
+    <p id="message" role="status" hidden></p>
+  </main>
+</body>
+</html>
