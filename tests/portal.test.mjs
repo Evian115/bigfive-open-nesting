@@ -63,3 +63,86 @@ test('有效的旧登录缓存无需通讯录重核验，姓名和头像由当�
  }
  assert.equal(ctx.registrations.all().length,0);assert.equal(inserts,0);
  });
+
+test('提交编号与其他邀请冲突时不占用当前邀请，换用新编号仍可正常提交',async t=>{
+ const ctx=await http(t),user=await login(ctx);
+ const first=await open(ctx,await issue(ctx,user,'第一位访客'));
+ const second=await open(ctx,await issue(ctx,user,'第二位访客'));
+ const id=randomUUID();
+ const submit=(guest,submissionId)=>ctx.request('/api/results',{method:'POST',headers:{origin:ctx.origin,cookie:guest.cookie,'x-nesting-visit':guest.visit,'x-nesting-submission-id':submissionId,'content-type':'application/json'},body:JSON.stringify(input)});
+ assert.equal((await submit(first,id)).status,201);
+ const conflict=await submit(second,id);assert.equal(conflict.status,409);
+ const portal=new Portal(ctx.store,ctx.settings,{auth});
+ const invitation=portal.get('invitations',second.invitationId);
+ assert.equal(invitation.submissionId,undefined);
+ assert.equal(invitation.claimedSession,undefined);
+ assert.equal((await submit(second,randomUUID())).status,201);
+ assert.equal(ctx.posts,2);
+});
+
+test('响应丢失后重放成功回执仍签发报告凭据，凭据按报告路径隔离',async t=>{
+ const ctx=await http(t),user=await login(ctx),guest=await open(ctx,await issue(ctx,user)),id=randomUUID();
+ const options={method:'POST',headers:{origin:ctx.origin,cookie:guest.cookie,'x-nesting-visit':guest.visit,'x-nesting-submission-id':id,'content-type':'application/json'},body:JSON.stringify(input)};
+ const first=await ctx.request('/api/results',options);assert.equal(first.status,201);
+ const replay=await ctx.request('/api/results',options);assert.equal(replay.status,201);assert.equal(ctx.posts,1);
+ for(const response of [first,replay]){
+  const header=response.headers.getSetCookie().find(value=>value.startsWith('nest_report_visit='));
+  assert.ok(header,'original and replayed receipts both set the report cookie');
+  assert.match(header,/; Path=\/zh\/r\/demo0001;/);
+ }
+ const report=await ctx.request('/zh/r/demo0001',{headers:{cookie:guest.cookie+'; '+cookieFor(replay,'nest_report_visit')}});
+ assert.equal(report.status,200);
+ assert.equal((await ctx.request('/zh/r/demo0001',{headers:{cookie:guest.cookie+'; '+cookieFor(replay,'nest_report_visit')}})).status,410);
+});
+
+test('同一浏览器并行完成不同邀请时报告凭据不会互相覆盖',async t=>{
+ let posts=0;const ctx=await http(t,{fetcher:async(url,init)=>init.method==='POST'?new Response(JSON.stringify({id:'demo000'+(++posts)}),{status:201,headers:{'content-type':'application/json'}}):new Response(fixture,{headers:{'content-type':'text/html'}})});
+ const user=await login(ctx),a=await open(ctx,await issue(ctx,user,'并行访客甲'));
+ const token=await issue(ctx,user,'并行访客乙');
+ const b=await(await ctx.request('/_nest/invitations/open',{method:'POST',headers:{origin:ctx.origin,cookie:a.cookie,'content-type':'application/json'},body:JSON.stringify({token})})).json();
+ const submit=visit=>ctx.request('/api/results',{method:'POST',headers:{origin:ctx.origin,cookie:a.cookie,'x-nesting-visit':visit,'x-nesting-submission-id':randomUUID(),'content-type':'application/json'},body:JSON.stringify(input)});
+ const first=await submit(a.visit),second=await submit(b.visit);
+ assert.match(first.headers.getSetCookie().find(value=>value.startsWith('nest_report_visit=')),/; Path=\/zh\/r\/demo0001;/);
+ assert.match(second.headers.getSetCookie().find(value=>value.startsWith('nest_report_visit=')),/; Path=\/zh\/r\/demo0002;/);
+ for(const [response,id]of [[first,'demo0001'],[second,'demo0002']])assert.equal((await ctx.request('/zh/r/'+id,{headers:{cookie:a.cookie+'; '+cookieFor(response,'nest_report_visit')}})).status,200);
+});
+
+test('并发重试等待原站回执后仍签发报告凭据，原站只接收一次提交',async t=>{
+ let release,started,busy,posts=0;
+ const gate=new Promise(resolve=>{release=resolve;}),entered=new Promise(resolve=>{started=resolve;}),waiting=new Promise(resolve=>{busy=resolve;});
+ const ctx=await http(t,{fetcher:async()=>{posts++;started();await gate;return new Response('{"id":"demo0001"}',{status:201,headers:{'content-type':'application/json'}});}});
+ const user=await login(ctx),guest=await open(ctx,await issue(ctx,user)),id=randomUUID(),originalBegin=ctx.store.begin.bind(ctx.store);
+ ctx.store.begin=(...args)=>{const result=originalBegin(...args);if(result.busy)busy();return result;};
+ const options={method:'POST',headers:{origin:ctx.origin,cookie:guest.cookie,'x-nesting-visit':guest.visit,'x-nesting-submission-id':id,'content-type':'application/json'},body:JSON.stringify(input)};
+ const first=ctx.request('/api/results',options);await entered;
+ const retry=ctx.request('/api/results',options);await waiting;release();
+ for(const response of await Promise.all([first,retry])){
+  assert.equal(response.status,201);
+  assert.match(response.headers.getSetCookie().find(value=>value.startsWith('nest_report_visit=')),/; Path=\/zh\/r\/demo0001;/);
+ }
+ assert.equal(posts,1);
+});
+
+test('从额外本机入口登录时先跳转公开入口，避免OAuth state Cookie跨域丢失',async t=>{
+ const ctx=await http(t);ctx.settings.additionalOrigins=[ctx.origin];ctx.settings.publicOrigin='https://portal.example.test';
+ const local=await ctx.request('/auth/dingtalk/start');
+ assert.equal(local.status,302);assert.equal(local.headers.get('location'),'https://portal.example.test/auth/dingtalk/start');
+ assert.equal(cookieFor(local,'nest_oauth'),undefined);
+ const canonical=await ctx.request('/auth/dingtalk/start',{headers:{origin:ctx.settings.publicOrigin}});
+ const target=new URL(canonical.headers.get('location'));
+ assert.equal(target.hostname,'login.dingtalk.com');
+ assert.equal(target.searchParams.get('redirect_uri'),'https://portal.example.test/auth/dingtalk/callback');
+ assert.ok(cookieFor(canonical,'nest_oauth'));
+});
+
+test('JSON为null、数组或原始值时返回400，不创建登记或占用邀请',async t=>{
+ const ctx=await http(t),user=await login(ctx),guest=await open(ctx,await issue(ctx,user));
+ const count=ctx.registrations.all().length;
+ for(const value of [null,[],42,'invalid']){
+  const response=await ctx.request('/_nest/hr/invitations',{method:'POST',headers:{origin:ctx.origin,cookie:user.cookie,'x-nesting-csrf':user.csrf,'content-type':'application/json'},body:JSON.stringify(value)});
+  assert.equal(response.status,400);
+  const submission=await ctx.request('/api/results',{method:'POST',headers:{origin:ctx.origin,cookie:guest.cookie,'x-nesting-visit':guest.visit,'x-nesting-submission-id':randomUUID(),'content-type':'application/json'},body:JSON.stringify(value)});
+  assert.equal(submission.status,400);
+ }
+ assert.equal(ctx.registrations.all().length,count);assert.equal(ctx.store.all().length,0);assert.equal(ctx.posts,0);
+});

@@ -18,12 +18,12 @@ export class Portal {
  constructor(store,config,{fetcher=fetch,auth,registrations}={}){this.store=store;this.config=config;this.auth=auth||new HrAuth(config,{fetcher});this.registrations=registrations||new Registrations(store,config,{fetcher});}
  path(kind,id){if(!uuid.test(id))throw new PortalError('InvalidIdentifier');return join(this.store.directory,kind,id+'.json');}
  get(kind,id){return readJson(this.path(kind,id));} put(kind,row){return atomicJson(this.path(kind,row.id),row);}
- cookie(res,name,value,secure,maxAge){const previous=res.getHeader('set-cookie')||[];res.setHeader('set-cookie',[...(Array.isArray(previous)?previous:[previous]),`${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure?'; Secure':''}`]);}
+ cookie(res,name,value,secure,maxAge,path='/'){const previous=res.getHeader('set-cookie')||[];res.setHeader('set-cookie',[...(Array.isArray(previous)?previous:[previous]),`${name}=${value}; Path=${path}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure?'; Secure':''}`]);}
  json(res,status,value){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));return true;}
  page(res,file,status=200){res.writeHead(status,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"});res.end(files[file]);return true;}
  invalid(res){res.writeHead(410,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer'});res.end('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>测评链接已失效</title><body><h2>测评链接已失效</h2><p>本次测评已完成或链接已过期。如需重新测评，请联系人事生成新的链接。</p></body></html>');return true;}
  sameOrigin(req,origin){if(req.headers.origin!==origin)throw new PortalError('CrossOriginRequest',403);}
- async input(req){let size=0,parts=[];for await(const part of req){size+=part.length;if(size>16384)throw new PortalError('BodyTooLarge',413);parts.push(part);}try{return JSON.parse(Buffer.concat(parts).toString());}catch{throw new PortalError('InvalidJson');}}
+ async input(req){let size=0,parts=[];for await(const part of req){size+=part.length;if(size>16384)throw new PortalError('BodyTooLarge',413);parts.push(part);}try{const value=JSON.parse(Buffer.concat(parts).toString());if(!value||typeof value!=='object'||Array.isArray(value))throw new Error();return value;}catch{throw new PortalError('InvalidJson');}}
  async hr(req){
   const token=readCookie(req,'nest_hr'),id=token?.split('.')[0];if(!uuid.test(id||''))return null;
   const session=this.get('hr-sessions',id);if(!session||session.tokenHash!==digest(token)||session.expiresAt<=Date.now()||session.tenantKey!==this.auth.tenantKey)return null;
@@ -63,6 +63,9 @@ export class Portal {
  }
  activate(token,session){const {inv,view}=this.visit(token,session,{completed:false});if(inv.claimedSession&&inv.claimedSession!==digest(session))throw new PortalError('InvitationInUse',409);inv.claimedSession=digest(session);this.put('invitations',inv);return {inv,view};}
  reserve(token,session,submissionId){
+  // Validate existing submission ownership before claiming or changing this invitation.
+  const current=this.visit(token,session,{completed:false}),existing=this.store.getSubmission(submissionId);
+  if(existing&&(existing.session_id!==session||existing.invitation_id!==current.inv.id))throw new PortalError('SubmissionIdentityConflict',409);
   const {inv,view}=this.activate(token,session);
   if(inv.submissionId&&inv.submissionId!==submissionId){const prior=this.store.getSubmission(inv.submissionId);if(prior&&prior.state!=='rejected')throw new PortalError('InvitationAlreadySubmitted',409);}
   inv.submissionId=submissionId;inv.resultVisitId=view.id;this.put('invitations',inv);
@@ -90,6 +93,7 @@ export class Portal {
   if(asset&&req.method==='GET'){res.writeHead(200,{'content-type':asset.endsWith('.css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8','cache-control':'no-cache'});res.end(files[asset]);return true;}
   if(path==='/auth/dingtalk/start'&&req.method==='GET'){
    if(!this.auth.configured)throw new AuthError('LoginNotConfigured',503);
+   if(origin!==this.config.publicOrigin){res.writeHead(302,{location:this.config.publicOrigin+'/auth/dingtalk/start','cache-control':'no-store','referrer-policy':'no-referrer'});res.end();return true;}
    const id=randomUUID(),state=id+'.'+randomBytes(32).toString('base64url');this.put('oauth-states',{id,hash:digest(state),expiresAt:Date.now()+600000});
    this.cookie(res,'nest_oauth',state,secureCookie,600);
    const next=new URL('https://login.dingtalk.com/oauth2/auth');for(const[k,v]of Object.entries({client_id:this.config.dingtalk.appKey,redirect_uri:this.config.publicOrigin+'/auth/dingtalk/callback',response_type:'code',scope:'openid',state,prompt:'consent'}))next.searchParams.set(k,v);

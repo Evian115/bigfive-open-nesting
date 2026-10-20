@@ -100,12 +100,14 @@ export function createApp({ config,store,worker,fetcher=fetch,portalAuth }) {
       if (target.origin !== config.upstreamOrigin) return json(res,400,{error:'InvalidTarget'});
       const headers=requestHeaders(req,config,origin);
       let payload,submissionId,claim,context={};
+      const reportCookie=id=>{if(portal)portal.cookie(res,'nest_report_visit',req.headers['x-nesting-visit'],secureCookie,3600,`/zh/r/${id}`);};
       if (isSubmit) {
         submissionId=req.headers['x-nesting-submission-id'];
         if (!uuid.test(submissionId || '')) return json(res,400,{error:'SubmissionIdRequired'});
         if (!req.headers['content-type']?.startsWith('application/json')) return json(res,415,{error:'JsonRequired'});
         payload=await body(req);
         let input;try { input=JSON.parse(payload); } catch { return json(res,400,{error:'InvalidJson'}); }
+        if(!input||typeof input!=='object'||Array.isArray(input))return json(res,400,{error:'InvalidJson'});
         // Identity excludes finishedAt, which the original site refreshes on a retry.
         // Answers are forwarded without modification, never scored or persisted here.
         const hash=createHash('sha256').update(JSON.stringify({answers:input.answers,locale:input.locale,startedAt:input.startedAt})).digest('hex');
@@ -113,11 +115,11 @@ export function createApp({ config,store,worker,fetcher=fetch,portalAuth }) {
         claim=store.begin(submissionId,cookie(req),hash,Date.now(),context);
         if (claim.conflict) return json(res,409,{error:'SubmissionIdentityConflict'});
         if (claim.uncertain) return json(res,409,{error:'UpstreamOutcomeUnknown'});
-        if (claim.replay) { res.writeHead(claim.replay.http_status,{'content-type':'application/json','cache-control':'no-store'});return res.end(claim.replay.response_json); }
+        if (claim.replay) { reportCookie(claim.replay.upstream_id);res.writeHead(claim.replay.http_status,{'content-type':'application/json','cache-control':'no-store'});return res.end(claim.replay.response_json); }
         if (claim.busy) {
           if (inFlight.has(submissionId)) await inFlight.get(submissionId);
           const row=store.getSubmission(submissionId);
-          if (['accepted','captured'].includes(row.state)) { res.writeHead(row.http_status,{'content-type':'application/json','cache-control':'no-store'});return res.end(row.response_json); }
+          if (['accepted','captured'].includes(row.state)) { reportCookie(row.upstream_id);res.writeHead(row.http_status,{'content-type':'application/json','cache-control':'no-store'});return res.end(row.response_json); }
           return json(res,409,{error:'SubmissionInProgress'});
         }
       }
@@ -133,7 +135,7 @@ export function createApp({ config,store,worker,fetcher=fetch,portalAuth }) {
             let response;try { response=JSON.parse(responseBody); } catch {}
             if (!validResultId(response?.id)) { store.reject(submissionId,claim.token,true,'InvalidUpstreamResult'); return json(res,502,{error:'InvalidUpstreamResult'}); }
             store.accept(submissionId,claim.token,response.id,responseBody.toString('utf8'),upstream.status);
-            if(portal)portal.cookie(res,'nest_report_visit',req.headers['x-nesting-visit'],secureCookie,3600);
+            reportCookie(response.id);
             void worker.tick();
           } else store.reject(submissionId,claim.token,false,`UpstreamHttp${upstream.status}`,parseUpstreamRejection(responseBody,upstream.status));
           copyHeaders(upstream,res,config,origin);res.setHeader('cache-control','no-store');res.writeHead(upstream.status);return res.end(responseBody);
