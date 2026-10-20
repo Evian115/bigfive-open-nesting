@@ -3,9 +3,11 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {randomInt}=require('node:crypto');
 const {parseArgs}=require('node:util');
-const {values:options}=parseArgs({options:{url:{type:'string',default:'http://localhost:8082'},submit:{type:'boolean',default:false},headless:{type:'boolean',default:false},'delay-ms':{type:'string',default:'3000'},'playwright-module':{type:'string'},output:{type:'string'},'expect-sync':{type:'boolean',default:false},help:{type:'boolean',default:false}}});
+const {values:options}=parseArgs({options:{'invite-url':{type:'string'},url:{type:'string',default:'http://localhost:8082'},submit:{type:'boolean',default:false},headless:{type:'boolean',default:false},'delay-ms':{type:'string',default:'3000'},'playwright-module':{type:'string'},output:{type:'string'},'expect-sync':{type:'boolean',default:false},help:{type:'boolean',default:false}}});
 if(options.help){console.log('Usage: npm run test:assessment -- --url https://your-host/ --submit [--headless] [--expect-sync]\nWithout --submit, stops after answering. Default: 3 seconds per question. --expect-sync waits for DingTalk confirmation.');process.exit(0);}
 const target=new URL(options.url);if(!['http:','https:'].includes(target.protocol)||target.username||target.password||target.pathname!=='/'||target.search||target.hash)throw new Error('--url must be a service origin without credentials or path');
+const invitation=options['invite-url']?new URL(options['invite-url']):null;
+if(invitation&&(invitation.origin!==target.origin||invitation.pathname!=='/i'||!invitation.hash))throw new Error('--invite-url must be a full invitation URL under --url');
 const base=target.origin,delay=Number(options['delay-ms']);if(!Number.isInteger(delay)||delay<3000)throw new Error('--delay-ms must be at least 3000; upstream submission limits remain in effect');
 const output=path.resolve(options.output||path.join(__dirname,'../test-results/assessment-'+new Date().toISOString().replace(/[:.]/g,'-')));fs.mkdirSync(output,{recursive:true});
 const {chromium}=require(options['playwright-module']||process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -29,7 +31,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const health=await context.request.get(base+'/_nest/health');if(!health.ok())throw new Error('ServiceHealthUnavailable');
   const service=await health.json();summary.dingtalkConfigured=service.dingtalkConfigured;
   // Validate the public HTTPS origin/session path before spending time answering. Missing UUID stops before creating any task.
-  await page.goto(base+'/',{waitUntil:'domcontentloaded',timeout:60000});
+  await page.goto(invitation?invitation.href:base+'/',{waitUntil:'domcontentloaded',timeout:60000});
   const probe=await context.request.post(base+'/api/results',{headers:{origin:base},data:{}});const probeBody=await probe.json();
   if(probe.status()!==400||probeBody.error!=='SubmissionIdRequired')throw new Error(`Origin/session check failed: HTTP ${probe.status()} ${probeBody.error}`);
   console.log('Origin/session check passed.');
@@ -56,7 +58,8 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   await frame.locator('h1').waitFor({timeout:60000});
   const reportPage=page.frames().find(f=>new URL(f.url()).pathname==='/zh/r/'+reportId);if(!reportPage)throw new Error('OriginalReportNavigationMissing');
   // Parse only the source report. No local classification or score calculation.
-  const reportResponse=await context.request.get(base+'/zh/r/'+reportId);if(!reportResponse.ok())throw new Error('OriginalReportUnavailable');
+  const visit=await page.evaluate(()=>window.__nestVisit||null);
+  const reportResponse=await context.request.get(base+'/zh/r/'+reportId,{headers:visit?{'x-nesting-visit':visit}:{}});if(!reportResponse.ok())throw new Error('OriginalReportUnavailable');
   const {extractReport}=await import('../server/report.mjs');const report=extractReport(await reportResponse.text(),reportId,'https://bigfivepersonality.me');
   await frame.getByRole('heading',{name:report.personality_type,exact:true}).waitFor({timeout:30000});
   summary.report={id:reportId,type:report.personality_type,description:report.description,resultUrl:report.result_url,scores:Object.fromEntries(['openness','conscientiousness','extraversion','agreeableness','neuroticism'].map(key=>[key,report[key]]))};

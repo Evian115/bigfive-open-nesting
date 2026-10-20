@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 export const dimensions = { openness: 'O', conscientiousness: 'C', extraversion: 'E', agreeableness: 'A', neuroticism: 'N' };
-export const defaultFields = { openness: '开放性', conscientiousness: '尽责性', extraversion: '外向性', agreeableness: '宜人性', neuroticism: '神经质', personality_type: '人格类型', description: '描述', result_url: '链接', created_at: '写入时间', updated_at: '更新时间' };
+export const defaultFields = { openness: '开放性', conscientiousness: '尽责性', extraversion: '外向性', agreeableness: '宜人性', neuroticism: '神经质', personality_type: '人格类型', description: '描述', result_url: '链接', created_at: '写入时间', updated_at: '更新时间', visitor_name: '姓名', visitor_phone: '电话' };
 export function config(env = process.env) {
   const number = (key, fallback, min = 1) => {
     const value = Number(env[key] || fallback);
@@ -25,6 +25,7 @@ export function config(env = process.env) {
   const fields = { ...defaultFields, ...overrides };
   if (new Set(Object.values(fields)).size !== Object.keys(defaultFields).length) throw new Error('Duplicate DingTalk field names');
   return {
+    portalEnabled: env.HR_PORTAL_ENABLED === 'true',
     host: env.HOST || '127.0.0.1', port: number('PORT', 8082, 0), publicOrigin: origin?.origin, additionalOrigins,
     upstreamOrigin: upstream.origin, stateDirectory: resolve(env.STATE_DIRECTORY || './data'),
     cookieSecure: env.COOKIE_SECURE === 'true' || origin?.protocol === 'https:',

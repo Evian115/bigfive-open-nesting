@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import {Portal,PortalError,readCookie} from './portal.mjs';
+import {AuthError} from './hr-auth.mjs';
 import { validResultId } from './report.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const assets = Object.fromEntries(['index.html','shell.js','shell.css','bridge.js'].map(name => [name,readFileSync(new URL(`../public/${name}`,import.meta.url))]));
@@ -18,7 +20,7 @@ function requestHeaders(req,config,origin) {
     if (hop.has(name) || name.startsWith('x-nesting-') || name.startsWith('sec-fetch-') || name === 'cookie' || name === 'origin' || name === 'referer') continue;
     if (typeof value === 'string') headers.set(name,value);
   }
-  const cookies=(req.headers.cookie || '').split(';').filter(v=>!v.trim().startsWith('nest_session=')).join(';');
+  const cookies=(req.headers.cookie || '').split(';').filter(v=>!v.trim().startsWith('nest_')).join(';');
   if (cookies) headers.set('cookie',cookies);
   if (req.headers.origin === origin) headers.set('origin',config.upstreamOrigin);
   if (req.headers.referer) {
@@ -35,8 +37,8 @@ function copyHeaders(upstream,res,config,origin) {
       res.setHeader(key,target.origin===config.upstreamOrigin ? origin+target.pathname+target.search+target.hash : target.href);
     } else res.setHeader(key,value);
   }
-  const cookies=upstream.headers.getSetCookie?.().filter(v=>!v.startsWith('nest_session=')) ?? [];
-  if (cookies.length) res.setHeader('set-cookie',cookies.map(v=>v.replace(/;\s*Domain=[^;]*/ig,'')));
+  const cookies=upstream.headers.getSetCookie?.().filter(v=>!v.startsWith('nest_')) ?? [];
+  if (cookies.length) res.setHeader('set-cookie',[...(res.getHeader('set-cookie')||[]),...cookies.map(v=>v.replace(/;\s*Domain=[^;]*/ig,''))]);
   res.setHeader('x-content-type-options','nosniff');
   res.setHeader('referrer-policy','same-origin');
 }
@@ -52,8 +54,8 @@ export function parseUpstreamRejection(bytes,status) {
   }catch{}
   return result;
 }
-export function createApp({ config,store,worker,fetcher=fetch }) {
-  const inFlight=new Map();
+export function createApp({ config,store,worker,fetcher=fetch,portalAuth }) {
+  const inFlight=new Map(),portal=config.portalEnabled?new Portal(store,config,{fetcher,auth:portalAuth}):null;
   const server=createServer(async(req,res) => {
     try {
       const fallback=`http://${req.headers.host}`;
@@ -67,6 +69,7 @@ export function createApp({ config,store,worker,fetcher=fetch }) {
       if (!['GET','HEAD','POST'].includes(req.method)) return json(res,405,{error:'MethodNotAllowed'});
       if (!req.url?.startsWith('/') || req.url.startsWith('//') || req.url.includes('\\')) return json(res,400,{error:'InvalidPath'});
       const url=new URL(req.url,origin), path=url.pathname;
+      if(portal&&await portal.handle(req,res,{path,url,origin,secureCookie,session:cookie(req)}))return;
       if (path==='/_nest/health') return json(res,200,{ok:true,dingtalkConfigured:!!config.dingtalk,storage:'durable-files'});
       if (path==='/' && req.method==='GET' && !req.headers.rsc && req.headers['sec-fetch-dest']!=='iframe') {
         let session=cookie(req);
@@ -95,7 +98,7 @@ export function createApp({ config,store,worker,fetcher=fetch }) {
       const target=new URL(config.upstreamOrigin+req.url);
       if (target.origin !== config.upstreamOrigin) return json(res,400,{error:'InvalidTarget'});
       const headers=requestHeaders(req,config,origin);
-      let payload,submissionId,claim;
+      let payload,submissionId,claim,context={};
       if (isSubmit) {
         submissionId=req.headers['x-nesting-submission-id'];
         if (!uuid.test(submissionId || '')) return json(res,400,{error:'SubmissionIdRequired'});
@@ -105,7 +108,8 @@ export function createApp({ config,store,worker,fetcher=fetch }) {
         // Identity excludes finishedAt, which the original site refreshes on a retry.
         // Answers are forwarded without modification, never scored or persisted here.
         const hash=createHash('sha256').update(JSON.stringify({answers:input.answers,locale:input.locale,startedAt:input.startedAt})).digest('hex');
-        claim=store.begin(submissionId,cookie(req),hash);
+        if(portal)context=portal.submission(req.headers['x-nesting-visit'],cookie(req),submissionId);
+        claim=store.begin(submissionId,cookie(req),hash,Date.now(),context);
         if (claim.conflict) return json(res,409,{error:'SubmissionIdentityConflict'});
         if (claim.uncertain) return json(res,409,{error:'UpstreamOutcomeUnknown'});
         if (claim.replay) { res.writeHead(claim.replay.http_status,{'content-type':'application/json','cache-control':'no-store'});return res.end(claim.replay.response_json); }
@@ -116,6 +120,8 @@ export function createApp({ config,store,worker,fetcher=fetch }) {
           return json(res,409,{error:'SubmissionInProgress'});
         }
       }
+      const reportMatch=path.match(/^\/zh\/r\/([A-Za-z0-9_-]+)\/?$/);
+      if(portal&&reportMatch){try{portal.report(req,cookie(req),reportMatch[1]);}catch(e){if(e instanceof PortalError)return portal.invalid(res);throw e;}}
       let release;
       if (isSubmit) inFlight.set(submissionId,new Promise(resolve=>{ release=resolve; }));
       try {
@@ -126,11 +132,13 @@ export function createApp({ config,store,worker,fetcher=fetch }) {
             let response;try { response=JSON.parse(responseBody); } catch {}
             if (!validResultId(response?.id)) { store.reject(submissionId,claim.token,true,'InvalidUpstreamResult'); return json(res,502,{error:'InvalidUpstreamResult'}); }
             store.accept(submissionId,claim.token,response.id,responseBody.toString('utf8'),upstream.status);
+            if(portal)portal.cookie(res,'nest_report_visit',req.headers['x-nesting-visit'],secureCookie,3600);
             void worker.tick();
           } else store.reject(submissionId,claim.token,false,`UpstreamHttp${upstream.status}`,parseUpstreamRejection(responseBody,upstream.status));
           copyHeaders(upstream,res,config,origin);res.setHeader('cache-control','no-store');res.writeHead(upstream.status);return res.end(responseBody);
         }
         copyHeaders(upstream,res,config,origin);
+        if(portal&&reportMatch)res.setHeader('cache-control','no-store');
         const type=upstream.headers.get('content-type') || '';
         if (/text\/html|text\/x-component|javascript|text\/css/.test(type) && upstream.status===200 && req.method!=='HEAD') {
           let text=await upstream.text();
@@ -149,6 +157,10 @@ export function createApp({ config,store,worker,fetcher=fetch }) {
         if (!res.headersSent) json(res,502,{error:'UpstreamUnavailable'});else res.destroy();
       } finally { release?.();if(submissionId)inFlight.delete(submissionId); }
     } catch(e) {
+      if(e instanceof PortalError||e instanceof AuthError){
+        if(req.url?.startsWith('/auth/')){res.writeHead(303,{location:'/?login='+encodeURIComponent(e.message),'cache-control':'no-store','referrer-policy':'no-referrer'});res.end();return;}
+        return json(res,e.status,{error:e.message});
+      }
       console.error('RequestFailed',e.status || 'InternalError');
       if (!res.headersSent) json(res,e.status || 500,{error:e.status===413?'BodyTooLarge':'ServicePersistenceError'});else res.destroy();
     }

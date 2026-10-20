@@ -1,1 +1,3 @@
 :root{color-scheme:light;font-family:Inter,"Noto Sans SC","Microsoft YaHei",sans-serif;color:#213345;background:#fff}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;height:100dvh;overflow:hidden}main{position:relative;height:100%}iframe{display:block;border:0;width:100%;height:100%;background:#fff}#load-error{position:absolute;bottom:0;left:0;right:0;padding:16px;background:#fff2ef;color:#993d2b;font-size:13px}
+
+#invite-state{position:absolute;inset:0;display:grid;place-content:center;padding:28px;text-align:center;font-size:15px;line-height:1.9;color:#526c60;background:#f7f8f4}
