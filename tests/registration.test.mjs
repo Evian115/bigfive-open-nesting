@@ -10,7 +10,7 @@ import {Registrations} from '../server/registrations.mjs';
 import {DingtalkClient,dingFields} from '../server/dingtalk.mjs';
 import {Worker} from '../server/worker.mjs';
 import {extractReport} from '../server/report.mjs';
-const schema=Object.entries(defaultFields).map(([key,name])=>({id:'field-'+key,name,type:({visitor_name:'text',visitor_phone:'telephone',created_at:'date',updated_at:'lastModifiedTime',description:'richText',personality_type:'singleSelect',result_url:'url'})[key]||'number',property:key==='personality_type'?{choices:[{name:'架构师',id:'architect'}]}:{formatter:'PERCENT'}}));
+const schema=Object.entries(defaultFields).map(([key,name])=>({id:'field-'+key,name,type:({visitor_name:'text',visitor_phone:'telephone',created_at:'createdTime',updated_at:'lastModifiedTime',description:'richText',personality_type:'singleSelect',result_url:'url'})[key]||'number',property:key==='personality_type'?{choices:[{name:'架构师',id:'architect'}]}:{formatter:'PERCENT'}}));
 const contact={visitor_name:'两阶段联调访客',visitor_phone:'13912345678'};
 const response=(data,status=200)=>new Response(JSON.stringify(data),{status});
 const fixture=readFileSync(new URL('./fixtures/report.html',import.meta.url),'utf8');
@@ -24,7 +24,8 @@ function remote(settings){
   if(url.pathname.endsWith('/list'))return response({records:rows.map(r=>({...r,fields:{...r.fields}})),hasMore:false});
   if(options.method==='POST'){
    const token=url.searchParams.get('clientToken');if(tokens.has(token))return response({code:'invalidRequest.duplicateClientToken'},400);
-   const row={id:'row-'+(rows.length+1),fields:{...body.records[0].fields}};rows.push(row);tokens.set(token,row.id);
+   assert.equal(body.records[0].fields.写入时间,undefined);assert.equal(body.records[0].fields.更新时间,undefined);
+   const row={id:'row-'+(rows.length+1),fields:{...body.records[0].fields,写入时间:Date.now()+rows.length}};rows.push(row);tokens.set(token,row.id);
    if(loseInsert){loseInsert=false;throw new Error('response dropped');}return response({value:[{id:row.id}]});
   }
   if(options.method==='PUT'){
@@ -38,11 +39,11 @@ function remote(settings){
 function capture(store,inv){const id=randomUUID(),session=store.newSession(),claim=store.begin(id,session,'hash',Date.now(),{invitation_id:inv.id,contact_cipher:inv.contact_cipher});store.accept(id,claim.token,'demo0001','{"id":"demo0001"}',201);store.capture(store.claim('submissions'),extractReport(fixture,'demo0001','https://bigfivepersonality.me'));return id;}
 const pause=()=>new Promise(r=>setTimeout(r,8));
 
-test('先登记三字段、确认后才发链接；同一请求并发和响应丢失重试均不新增登记行',async t=>{
+test('先登记姓名电话、时间由钉钉生成、确认后才发链接；同一请求并发和响应丢失重试均不新增登记行',async t=>{
  const {store,settings}=setup(t),r=remote(settings),queue=new Registrations(store,settings,{dingClient:r.client}),id=randomUUID();
  const inv=queue.create(contact,'owner',id);r.dropInsert();
  await Promise.all([queue.process(id),queue.process(id)]);
- assert.equal(r.rows.length,1);assert.deepEqual(Object.keys(r.rows[0].fields).sort(),['姓名','电话','写入时间'].sort());assert.equal(r.rows[0].fields.写入时间,inv.createdAt);
+ assert.equal(r.rows.length,1);const firstInsert=r.calls.find(c=>c.method==='POST'&&c.path.endsWith('/records'));assert.deepEqual(Object.keys(firstInsert.body.records[0].fields).sort(),['姓名','电话'].sort());assert.ok(r.rows[0].fields.写入时间>0);
  const pending=queue.response(id,'owner',settings.publicOrigin);assert.equal(pending.state,'retrying');assert.equal(pending.url,undefined);
  assert.throws(()=>queue.response(id,'another-owner',settings.publicOrigin),/RegistrationNotFound/);
  assert.throws(()=>queue.create(contact,'another-owner',id),/RegistrationConflict/);
@@ -72,7 +73,7 @@ test('结果按姓名电话精确匹配并跨页取最大写入时间，不使�
  const client=new DingtalkClient(settings,{fetcher:async(url,options)=>{
   if(String(url).endsWith('accessToken'))return response({accessToken:'t',expireIn:60});
   if(String(url).includes('/fields'))return response({value:schema});
-  const body=JSON.parse(options.body);assert.deepEqual(body.fieldIdOrNames,['姓名','电话','写入时间']);if(lists)assert.equal(body.nextToken,'next');
+  const body=JSON.parse(options.body);assert.deepEqual(body.fieldIdOrNames,['姓名','电话','写入时间']);assert.equal(body.calcFields,true);if(lists)assert.equal(body.nextToken,'next');
   return response({records:pages[lists],hasMore:lists++===0,nextToken:'next'});
  }});
  assert.deepEqual(await client.findLatest(contact),{id:'newest',createdAt:2000});assert.equal(lists,2);
@@ -100,7 +101,7 @@ test('测评更新最新登记行的八项结果；断网重试固定目标行�
  const restarted=new Store(store.directory);worker=new Worker(restarted,settings,{dingClient:r.client});await worker.tick();
  task=restarted.getSubmission(id);assert.equal(task.delivery.state,'synced');assert.equal(task.delivery.remote_id,'row-2');assert.equal(r.rows.length,3);assert.equal(r.rows[2].fields.开放性,undefined);
  const patches=r.calls.filter(c=>c.method==='PUT');assert.equal(patches.length,2);assert.deepEqual(patches[0].body,patches[1].body);
- const fields=patches[0].body.records[0].fields;assert.deepEqual(Object.keys(fields).sort(),['开放性','尽责性','外向性','宜人性','神经质','人格类型','描述','链接'].sort());assert.ok(fields.描述.markdown);assert.equal(r.rows[1].fields.写入时间,b.createdAt);
+ const fields=patches[0].body.records[0].fields;assert.deepEqual(Object.keys(fields).sort(),['开放性','尽责性','外向性','宜人性','神经质','人格类型','描述','链接'].sort());assert.ok(fields.描述.markdown);assert.ok(r.rows[1].fields.写入时间>0);
  assert.ok(firstCipher);assert.equal(task.contact_cipher,undefined);assert.equal(task.pending_result,undefined);assert.equal(task.delivery.fields_cipher,undefined);assert.equal(queue.get(a.id).contact_cipher,undefined);assert.ok(queue.get(b.id).contact_cipher);
 });
 
@@ -117,7 +118,7 @@ test('更新时间在普通发送、旧快照重试与结果更新中均不写�
   if(String(url).endsWith('/accessToken'))return response({accessToken:'t',expireIn:60});bodies.push(JSON.parse(options.body));return response({value:[{id:'wrong-id'}]});
  }});
  const task={target_base:'b',target_sheet:'s',record_id:'target',client_token:randomUUID(),fields_json:JSON.stringify({姓名:'旧姓名',电话:'13800138000',写入时间:123,更新时间:456,开放性:.42})};
- await client.insert(task);assert.equal(bodies[0].records[0].fields.更新时间,undefined);
+ await client.insert(task);assert.equal(bodies[0].records[0].fields.更新时间,undefined);assert.equal(bodies[0].records[0].fields.写入时间,undefined);
  await assert.rejects(()=>client.update(task),/InvalidUpdateResponse/);assert.deepEqual(bodies[1].records[0].fields,{开放性:.42});
 });
 
@@ -126,6 +127,7 @@ test('登记字段元数据读取失败或电话类型不符时不创建行、�
  const ding=new DingtalkClient(settings.dingtalk,{fetcher:async(url)=>{
   if(String(url).endsWith('/accessToken'))return response({accessToken:'t',expireIn:60});
   if(String(url).includes('/fields'))return response({value:schema.map(f=>f.name==='电话'&&invalid?{...f,type:'text'}:f)});
+  if(String(url).includes('/list'))return response({records:[],hasMore:false});
   inserts++;return response({value:[{id:'registered'}]});
  }});
  const queue=new Registrations(store,settings,{dingClient:ding}),inv=queue.create(contact,'owner');await queue.process(inv.id);
@@ -144,4 +146,18 @@ test('登记字段元数据读取失败或电话类型不符时不创建行、�
  }});
  const task={target_base:'base',target_sheet:'sheet',record_id:'target',fields_json:JSON.stringify({人格类型:'温柔智者'})};
  assert.equal(await client.update(task),'target');assert.equal(calls.length,2);assert.equal(calls[1].records[0].fields.人格类型,'温柔智者');
+ });
+
+ test('同姓名电话多次登记后回执丢失，恢复时排除登记前已有行并找到本次新增行',async t=>{
+ const {store,settings}=setup(t),r=remote(settings),queue=new Registrations(store,settings,{dingClient:r.client});
+ const old=queue.create(contact,'owner');await queue.process(old.id);
+ const current=queue.create(contact,'owner');r.dropInsert();await queue.process(current.id);assert.equal(r.rows.length,2);assert.equal(queue.get(current.id).registration.state,'retrying');assert.ok(queue.get(current.id).registration.prior_ids_cipher);
+ await pause();const restarted=new Registrations(new Store(store.directory),settings,{dingClient:r.client});await restarted.process(current.id);
+ assert.equal(r.rows.length,2);assert.equal(restarted.get(current.id).registration.remote_id,'row-2');assert.equal(restarted.get(current.id).registration.prior_ids_cipher,undefined);
+ });
+
+ test('自动写入时间字段不需要写权限，姓名电话之外不发送时间；只读列缺失时保留重试',async()=>{
+ let fields=schema;const ding=new DingtalkClient({fields:defaultFields,baseId:'b',sheetId:'s'},{fetcher:async url=>String(url).endsWith('/accessToken')?response({accessToken:'t',expireIn:60}):response({value:fields})});
+ assert.deepEqual(await ding.prepareRegistration(contact),{姓名:contact.visitor_name,电话:contact.visitor_phone});
+ fields=schema.filter(f=>f.name!=='写入时间');await assert.rejects(()=>ding.prepareRegistration(contact),/RegistrationFieldTypeChanged/);
  });

@@ -124,7 +124,7 @@ test('历史未投递任务补读原站类型，保留原分数、时间与幂�
  const before=store.getSubmission(id);let sent;
  const worker=new Worker(store,{...cfg,dingtalk:{baseId:'b',sheetId:'s'}},{fetcher:async()=>new Response(html,{headers:{'content-type':'text/html'}}),dingClient:{insert:async task=>{sent=task;return 'remote';}}});
  await worker.tick();assert.equal(store.getSubmission(id).delivery.state,'synced');
- const fields=JSON.parse(sent.fields_json);assert.equal(fields.人格类型,'架构师');assert.equal(fields.开放性,before.pending_result.openness/100);assert.equal(fields.写入时间,before.pending_result.created_at);assert.equal(sent.client_token,before.delivery.client_token);
+ const fields=JSON.parse(sent.fields_json);assert.equal(fields.人格类型,'架构师');assert.equal(fields.开放性,before.pending_result.openness/100);assert.equal(fields.写入时间,undefined);assert.equal(sent.client_token,before.delivery.client_token);
 });
 test('补读报告分数变化或旧字段快照已投递时保留失败任务，避免错误内容或重复写入',async t=>{
  for(const bound of [false,true]){
@@ -175,7 +175,7 @@ test('未投递旧任务缺少描述时从原报告补采，保留时间、类�
  store.capture(store.claim('submissions'),legacy);const before=store.getSubmission(id);let sent;
  const worker=new Worker(store,{...cfg,dingtalk:{baseId:'b',sheetId:'s'}},{fetcher:async()=>new Response(html,{headers:{'content-type':'text/html'}}),dingClient:{insert:async task=>{sent=task;return 'remote';}}});
  await worker.tick();assert.equal(store.getSubmission(id).delivery.state,'synced');const fields=JSON.parse(sent.fields_json);
- assert.deepEqual(fields.描述,{markdown:report.description});assert.equal(fields.人格类型,legacy.personality_type);assert.equal(fields.写入时间,before.pending_result.created_at);assert.equal(sent.client_token,before.delivery.client_token);assert.equal(store.result(id),undefined);
+ assert.deepEqual(fields.描述,{markdown:report.description});assert.equal(fields.人格类型,legacy.personality_type);assert.equal(fields.写入时间,undefined);assert.equal(sent.client_token,before.delivery.client_token);assert.equal(store.result(id),undefined);
 });
 test('百分比分数在发送时转换一次，原始整数和描述不变；支持各列独立格式',()=>{
  const result={...report,openness:0,conscientiousness:100,extraversion:42};

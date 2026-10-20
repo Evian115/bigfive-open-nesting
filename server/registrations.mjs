@@ -46,13 +46,15 @@ export class Registrations {
       if(task.target_base&&(task.target_base!==settings.baseId||task.target_sheet!==settings.sheetId))throw new Error('DingTalkTargetChanged');
       if(!task.fields_cipher) {
         const contact=unseal(this.store.key,inv.contact_cipher,'contact');
-        const fields=await this.ding.prepareRegistration(contact,inv.createdAt);
-        inv=this.get(id);task={...inv.registration,target_base:settings.baseId,target_sheet:settings.sheetId,fields_cipher:seal(this.store.key,JSON.stringify(fields),'registration')};
+        const fields=await this.ding.prepareRegistration(contact);
+        const priorIds=this.ding.registrationBaseline?await this.ding.registrationBaseline(contact):null;
+        inv=this.get(id);task={...inv.registration,...(priorIds?{prior_ids_cipher:seal(this.store.key,priorIds,'registration-recovery')}:{}),target_base:settings.baseId,target_sheet:settings.sheetId,fields_cipher:seal(this.store.key,JSON.stringify(fields),'registration')};
         this.put({...inv,registration:task});
       }
-      const remoteId=await this.ding.insert({...task,fields_json:unseal(this.store.key,task.fields_cipher,'registration')});
+      const excluded=task.prior_ids_cipher?[...unseal(this.store.key,task.prior_ids_cipher,'registration-recovery'),...this.all().filter(other=>other.id!==id&&other.registration?.remote_id&&other.registration.target_base===task.target_base&&other.registration.target_sheet===task.target_sheet).map(other=>other.registration.remote_id)]:[];
+      const remoteId=await this.ding.insert({...task,excluded_record_ids:excluded,fields_json:unseal(this.store.key,task.fields_cipher,'registration')});
       if(typeof remoteId!=='string'||!remoteId)throw new Error('InvalidInsertResponse');
-      inv=this.get(id);const {fields_cipher,...receipt}=inv.registration;
+      inv=this.get(id);const {fields_cipher,prior_ids_cipher,...receipt}=inv.registration;
       this.put({...inv,registration:{...receipt,state:'synced',remote_id:remoteId,synced_at:Date.now(),last_error:null}});
     }catch(e) {
       inv=this.get(id);task=inv.registration;
