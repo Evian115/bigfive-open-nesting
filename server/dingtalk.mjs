@@ -11,7 +11,7 @@ export function dingFields(result, map = defaultFields, schema, {assessmentOnly=
     if (matches.length!==1) throw new DeliveryError('DingTalkFieldMissingOrAmbiguous');
     return matches[0];
   };
-  return Object.fromEntries(Object.entries(map).filter(([key])=>key!=='updated_at'&&(!assessmentOnly||!['visitor_name','visitor_phone','created_at'].includes(key))&&(!['visitor_name','visitor_phone'].includes(key)||result[key]!==undefined)).map(([key,name]) => {
+  return Object.fromEntries(Object.entries(map).filter(([key])=>!['created_at','updated_at'].includes(key)&&(!assessmentOnly||!['visitor_name','visitor_phone','created_at'].includes(key))&&(!['visitor_name','visitor_phone'].includes(key)||result[key]!==undefined)).map(([key,name]) => {
     let value=result[key];
     if (key in dimensions) {
       if (!Number.isInteger(value) || value<0 || value>100) throw new DeliveryError('InvalidScore');
@@ -67,17 +67,30 @@ export class DingtalkClient {
     return data.value;
   }
   async prepareFields(result, options) { return dingFields(result,this.settings.fields,await this.fieldSchema(),options); }
-  async prepareRegistration(contact, createdAt) {
+  async prepareRegistration(contact) {
     const map=this.settings.fields||defaultFields,schema=await this.fieldSchema();
-    for(const [key,type] of [['visitor_name','text'],['visitor_phone','telephone'],['created_at','date']]) {
+    for(const [key,type] of [['visitor_name','text'],['visitor_phone','telephone'],['created_at','createdTime']]) {
       const matches=schema.filter(f=>f.name===map[key]||f.id===map[key]);
       if(matches.length!==1||matches[0].type!==type)throw new DeliveryError('DingTalkRegistrationFieldTypeChanged');
     }
-    return {[map.visitor_name]:contact.visitor_name,[map.visitor_phone]:contact.visitor_phone,[map.created_at]:createdAt};
+    return {[map.visitor_name]:contact.visitor_name,[map.visitor_phone]:contact.visitor_phone};
   }
   recordsUrl(base=this.settings.baseId,sheet=this.settings.sheetId) {
     const url=new URL(`${this.origin}/v1.0/notable/bases/${encodeURIComponent(base)}/sheets/${encodeURIComponent(sheet)}/records`);
     url.searchParams.set('operatorId',this.settings.operatorId);return url;
+  }
+  async registrationBaseline(contact) {
+    const map=this.settings.fields||defaultFields,url=this.recordsUrl(),ids=[],seen=new Set();let nextToken;
+    url.pathname+='/list';const signal=AbortSignal.timeout(45000);
+    do {
+      const page=await this.json(url,{maxResults:100,fieldIdOrNames:[map.visitor_name,map.visitor_phone],...(nextToken?{nextToken}:{})},signal);
+      if(!Array.isArray(page.records))throw new DeliveryError('InvalidListResponse');
+      for(const row of page.records)if(row.fields?.[map.visitor_name]===contact.visitor_name&&row.fields?.[map.visitor_phone]===contact.visitor_phone){if(typeof row.id!=='string'||!row.id)throw new DeliveryError('InvalidListResponse');ids.push(row.id);}
+      if(!page.hasMore)break;
+      if(typeof page.nextToken!=='string'||!page.nextToken||seen.has(page.nextToken))throw new DeliveryError('InvalidPagination');
+      nextToken=page.nextToken;seen.add(nextToken);
+    }while(true);
+    return ids;
   }
   async findLatest(contact) {
     const map=this.settings.fields||defaultFields,schema=await this.fieldSchema(),keys=['visitor_name','visitor_phone','created_at'];
@@ -85,7 +98,7 @@ export class DingtalkClient {
     const url=this.recordsUrl();url.pathname+='/list';let nextToken,latest,tied=false;const seen=new Set();
     const signal=AbortSignal.timeout(45000);
     do {
-      const page=await this.json(url,{maxResults:100,fieldIdOrNames:keys.map(k=>map[k]),...(nextToken?{nextToken}:{})},signal);
+      const page=await this.json(url,{maxResults:100,calcFields:true,fieldIdOrNames:keys.map(k=>map[k]),...(nextToken?{nextToken}:{})},signal);
       if(!Array.isArray(page.records))throw new DeliveryError('InvalidListResponse');
       for(const row of page.records) {
         const value=key=>row.fields?.[map[key]]??row.fields?.[fields[key].id];
@@ -136,13 +149,14 @@ export class DingtalkClient {
       }catch(e){if(!attempt&&['Unauthorized','InvalidAuthentication','InvalidAccessToken','AccessToken.Expired'].includes(e.message)){this.token=null;continue;}throw e;}
     }
   }
-  async recover(url, expected, signal) {
+  async recover(url, expected, signal, excludedIds = []) {
     url = new URL(url); url.pathname += '/list'; url.searchParams.delete('clientToken');
-    const matches = new Set(), seen = new Set(); let nextToken;
+    const matches = new Set(), seen = new Set(), excluded = new Set(excludedIds); let nextToken;
     do {
       const page = await this.json(url,{maxResults:100,fieldIdOrNames:Object.keys(expected),...(nextToken ? {nextToken} : {})},signal);
       if (!Array.isArray(page.records)) throw new DeliveryError('InvalidListResponse');
       for (const row of page.records) {
+        if(excluded.has(row.id))continue;
         const equals = Object.entries(expected).every(([name,value]) => {
           const actual=row.fields?.[name];
           if (value && typeof value==='object') {
@@ -170,14 +184,14 @@ export class DingtalkClient {
     const clientToken=/^[0-9a-f]{32}$/i.test(rawToken) ? rawToken.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,'$1-$2-$3-$4-$5') : rawToken;
     url.searchParams.set('operatorId',this.settings.operatorId); url.searchParams.set('clientToken',clientToken);
     const fields = JSON.parse(task.fields_json);
-    delete fields[(this.settings.fields||defaultFields).updated_at];
+    for(const key of ['created_at','updated_at'])delete fields[(this.settings.fields||defaultFields)[key]];
     for (let attempt=0;attempt<2;attempt++) {
       try {
         const data = await this.json(url,{records:[{fields}]},signal);
         if (!Array.isArray(data.value) || data.value.length !== 1 || typeof data.value[0]?.id !== 'string' || !data.value[0].id) throw new DeliveryError('InvalidInsertResponse');
         return data.value[0].id;
       } catch (e) {
-        if (e.message === 'invalidRequest.duplicateClientToken') return this.recover(url,fields,signal);
+        if (e.message === 'invalidRequest.duplicateClientToken') return this.recover(url,fields,signal,task.excluded_record_ids);
         if (!attempt && ['Unauthorized','InvalidAuthentication','InvalidAccessToken','AccessToken.Expired'].includes(e.message)) { this.token=null; continue; }
         throw e;
       }

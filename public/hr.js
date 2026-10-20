@@ -16,7 +16,7 @@
  async function request(url,options={}){const response=await fetch(url,{cache:'no-store',...options,headers:{'content-type':'application/json','x-nesting-csrf':csrf,...options.headers}});const value=await response.json();if(!response.ok)throw Object.assign(new Error(value.error||'RequestFailed'),{status:response.status});return value;}
  function accept(invitation){
   pendingKnown=true;
-  if(invitation.state!=='synced'){busy(true);message(invitation.state==='retrying'?'登记信息已保存，钉钉写入暂时失败，后台正在自动重试。确认写入后会显示链接。':'正在将姓名、电话和写入时间保存到钉钉，请稍候…');schedule();return;}
+  if(invitation.state!=='synced'){busy(true);message(invitation.state==='retrying'?'登记信息已保存，钉钉写入暂时失败，后台正在自动重试。确认写入后会显示链接。':'正在将姓名和电话保存到钉钉，请稍候…');schedule();return;}
   remember('');pendingKnown=false;clearTimeout(timer);busy(false);show('issued');node('invite-url').value=invitation.url;
   node('expiry').textContent='有效期至 '+new Date(invitation.expiresAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+'（北京时间）。完成后当前结果页可继续查看，关闭或刷新后入口失效。';
  }
