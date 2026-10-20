@@ -40,6 +40,8 @@ docker compose logs --tail=50
 docker compose ps
 ```
 
+服务器也可使用不含源码的预构建镜像交付包。在仓库运行 `bash scripts/package-image.sh`，生成的部署包位于 `dist/`，包含镜像、Compose 配置、空白凭据模板、Nginx 示例及必要说明。详见 [镜像部署说明](deploy/README.md)。
+
 - Compose 项目名 `bigfive-nesting-v2`，端口 `127.0.0.1:8082`，任务卷 `bigfive-nesting-v2_nesting-tasks`。
 - 旧的 `bigfive-open` 服务及其数据卷不变；原来占用 8081 的嵌套容器也不由本项目启动/删除。
 - `.env` 更改后执行 `docker compose up -d --force-recreate`；只用 `restart` 不会重新载入环境变量。
