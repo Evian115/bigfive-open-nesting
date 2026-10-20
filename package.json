@@ -1,0 +1,20 @@
+{
+  "name": "bigfive-open-nesting",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "原站测评嵌套与钉钉 AI 表格回传服务",
+  "engines": {
+    "node": ">=24.10.0"
+  },
+  "scripts": {
+    "start": "node --use-env-proxy --env-file-if-exists=.env server/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check server/index.mjs && node --check public/bridge.js && node --check public/shell.js",
+    "probe": "node --use-env-proxy scripts/probe.mjs",
+    "test:assessment": "node scripts/run-assessment-test.mjs"
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
+  }
+}
