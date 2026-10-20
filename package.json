@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --use-env-proxy --env-file-if-exists=.env server/index.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server/index.mjs && node --check public/bridge.js && node --check public/shell.js",
+    "check": "node --check server/index.mjs && node --check server/portal.mjs && node --check server/hr-auth.mjs && node --check public/bridge.js && node --check public/hr.js && node --check public/invitation.js && node --check public/shell.js",
     "probe": "node --use-env-proxy scripts/probe.mjs",
     "test:assessment": "node scripts/run-assessment-test.mjs"
   },

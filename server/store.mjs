@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, openSync, fsyncSync, closeSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import {seal,unseal,atomicJson,readJson} from './secure-files.mjs';
 import { dimensions } from './config.mjs';
 import { randomUUID, randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -40,16 +41,16 @@ export class Store {
     return row;
   }
   all() { return readdirSync(this.tasks).filter(n => n.endsWith('.json')).map(n => JSON.parse(readFileSync(join(this.tasks,n),'utf8'))); }
-  begin(id, session, hash, now = Date.now()) {
+  begin(id, session, hash, now = Date.now(), context = {}) {
     let row = this.getSubmission(id);
-    if (row && (row.session_id !== session || row.request_hash !== hash)) return { conflict: true };
+    if (row && (row.session_id !== session || row.request_hash !== hash || row.invitation_id !== context.invitation_id)) return { conflict: true };
     if (row && ['accepted','captured'].includes(row.state)) return { replay: row };
     if (row && row.state === 'submitting' && row.lease_until > now) return { busy: true };
     if (row && ['submitting','uncertain'].includes(row.state)) {
       this.write({ ...row, state: 'uncertain', last_error: 'UpstreamOutcomeUnknown', updated_at: now }); return { uncertain: true };
     }
     const token = randomUUID();
-    row = { ...row, id,session_id:session,request_hash:hash,state:'submitting',created_at:row?.created_at ?? now,updated_at:now,
+    row = { ...row, ...context, id,session_id:session,request_hash:hash,state:'submitting',created_at:row?.created_at ?? now,updated_at:now,
       lease_token:token,lease_until:now+60000,attempts:0,next_attempt_at:0,last_error:null,upstream_rejection:null };
     this.write(row); return { token };
   }
@@ -70,7 +71,7 @@ export class Store {
       const token = randomUUID();
       if (table === 'submissions') return this.write({ ...row,lease_token:token,lease_until:now+60000 });
       this.write({ ...row,delivery:{ ...task,lease_token:token,lease_until:now+60000 } });
-      return { ...task,id:row.id,result_id:row.id,lease_token:token };
+      return this.deliveryView({ ...task,lease_token:token },row.id);
     }
     return null;
   }
@@ -83,21 +84,22 @@ export class Store {
       delivery:{ state:'pending',client_token:randomUUID(),attempts:0,next_attempt_at:0,lease_until:0 } });
     return row.id;
   }
-  result(id) { return this.getSubmission(id)?.pending_result; }
+  result(id) { const row=this.getSubmission(id);return row?.pending_result ? {...row.pending_result,...(row.contact_cipher?unseal(this.key,row.contact_cipher,'contact'): {})}:undefined; }
+  deliveryView(task,id) {return {...task,id,result_id:id,...(task.fields_cipher?{fields_json:unseal(this.key,task.fields_cipher,'delivery')}: {})};}
   enrichResult(claimed, report) {
     const row = this.getSubmission(claimed.id);
     if (row.delivery.lease_token !== claimed.lease_token) throw new Error('DeliveryLeaseLost');
-    if (row.delivery.fields_json) throw new Error('LegacySnapshotNeedsReview');
+    if (row.delivery.fields_json || row.delivery.fields_cipher) throw new Error('LegacySnapshotNeedsReview');
     if (row.pending_result.result_url !== report.result_url || Object.keys(dimensions).some(key => row.pending_result[key] !== report[key])) throw new Error('ReportChanged');
     const result = { ...row.pending_result, personality_type: report.personality_type, description: report.description, source_hash: report.source_hash };
     this.write({ ...row, pending_result: result });
-    return result;
+    return this.result(row.id);
   }
   bindTarget(claimed, settings, fields) {
     const row = this.getSubmission(claimed.id);
     if (row.delivery.lease_token !== claimed.lease_token) throw new Error('DeliveryLeaseLost');
-    if (!row.delivery.target_base) this.write({ ...row,delivery:{ ...row.delivery,target_base:settings.baseId,target_sheet:settings.sheetId,fields_json:JSON.stringify(fields) } });
-    return { ...this.getSubmission(row.id).delivery,id:row.id,result_id:row.id };
+    if (!row.delivery.target_base) this.write({ ...row,delivery:{ ...row.delivery,target_base:settings.baseId,target_sheet:settings.sheetId,fields_cipher:seal(this.key,JSON.stringify(fields),'delivery') } });
+    return this.deliveryView(this.getSubmission(row.id).delivery,row.id);
   }
   failed(table, claimed, code, delay) {
     const row = this.getSubmission(claimed.id), task = table === 'submissions' ? row : row.delivery;
@@ -109,8 +111,9 @@ export class Store {
     const row = this.getSubmission(claimed.id);
     if (row.delivery.lease_token !== claimed.lease_token) return;
     // Keep minimal deduplication receipts; scores and the write payload are removed after success.
-    const { fields_json, ...receipt } = row.delivery;
-    delete row.pending_result;
+    const { fields_json, fields_cipher, ...receipt } = row.delivery;
+    delete row.pending_result;delete row.contact_cipher;
+    if(row.invitation_id){const path=join(this.directory,'invitations',row.invitation_id+'.json'),inv=readJson(path);if(inv){delete inv.contact_cipher;atomicJson(path,inv);}}
     this.write({ ...row,delivery:{ ...receipt,state:'synced',remote_id:remoteId,synced_at:Date.now(),last_error:null,lease_token:null,lease_until:0 } });
   }
   status(id, session) {

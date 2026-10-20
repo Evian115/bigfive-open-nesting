@@ -11,7 +11,7 @@ export function dingFields(result, map = defaultFields, schema) {
     if (matches.length!==1) throw new DeliveryError('DingTalkFieldMissingOrAmbiguous');
     return matches[0];
   };
-  return Object.fromEntries(Object.entries(map).map(([key,name]) => {
+  return Object.fromEntries(Object.entries(map).filter(([key])=>!['visitor_name','visitor_phone'].includes(key)||result[key]!==undefined).map(([key,name]) => {
     let value=result[key];
     if (key in dimensions) {
       if (!Number.isInteger(value) || value<0 || value>100) throw new DeliveryError('InvalidScore');
@@ -22,6 +22,10 @@ export function dingFields(result, map = defaultFields, schema) {
       const field=metadata(name,{type:'richText'});
       if (!['text','richText'].includes(field.type)) throw new DeliveryError('DingTalkDescriptionFieldTypeChanged');
       if (field.type==='richText') value={markdown:value};
+    } else if (key==='visitor_name' || key==='visitor_phone') {
+      if(typeof value!=='string'||!value.trim())throw new DeliveryError('MissingVisitorContact');
+      const field=metadata(name,{type:key==='visitor_name'?'text':'telephone'});
+      if(field.type!==(key==='visitor_name'?'text':'telephone'))throw new DeliveryError('DingTalkContactFieldTypeChanged');
     } else if (key==='result_url') value={text:'查看原站报告',link:value};
     return [name,value];
   }));
