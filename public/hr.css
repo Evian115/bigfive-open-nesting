@@ -8,7 +8,6 @@ button{cursor:pointer}
 a{color:inherit;text-decoration:none}
 .card{width:100%;max-width:420px;min-width:0;padding:32px;background:#fff;border:1px solid #e2e6ec;border-radius:12px;box-shadow:0 16px 44px #1822300c,0 2px 7px #18223006}
 #login{text-align:center;padding:0 4px}
-.app-mark{display:grid;place-items:center;width:48px;height:48px;margin:0 auto 18px;border-radius:50%;background:#2563eb;color:#fff;font-size:22px;font-weight:650;box-shadow:0 4px 12px #2563eb26}
 h1{font-size:22px;font-weight:650;line-height:1.4;margin:0 0 6px}
 h2{font-size:24px;font-weight:600;line-height:1.4;margin:0 0 10px}
 .muted{font-size:13px;line-height:1.8;color:#8290a3;margin:0 0 24px}
