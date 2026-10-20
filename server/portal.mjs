@@ -9,8 +9,8 @@ const files=Object.fromEntries(['hr.html','hr.js','hr.css','invitation.html','in
 export const readCookie=(req,name)=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(name+'='))?.slice(name.length+1);
 export class PortalError extends Error {constructor(code,status=400){super(code);this.status=status;}}
 export function validateContact(input){
- const name=typeof input.name==='string'?input.name.trim():'',raw=typeof input.phone==='string'?input.phone.trim():'';
- if(!name||name.length>80||/[\u0000-\u001f\u007f]/.test(name))throw new PortalError('InvalidName');
+ const name=typeof input.name==='string'?input.name:'',raw=typeof input.phone==='string'?input.phone.trim():'';
+ if(!name||name.length>80||/[^\p{Unified_Ideograph}]/u.test(name))throw new PortalError('InvalidName');
  const phone=raw.replace(/[\s-]/g,'').replace(/^\+86/,'');if(!/^1[3-9]\d{9}$/.test(phone))throw new PortalError('InvalidPhone');
  return {visitor_name:name,visitor_phone:phone};
 }
