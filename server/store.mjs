@@ -95,10 +95,16 @@ export class Store {
     this.write({ ...row, pending_result: result });
     return this.result(row.id);
   }
-  bindTarget(claimed, settings, fields) {
+  bindTarget(claimed, settings, fields, operation = {}) {
     const row = this.getSubmission(claimed.id);
     if (row.delivery.lease_token !== claimed.lease_token) throw new Error('DeliveryLeaseLost');
-    if (!row.delivery.target_base) this.write({ ...row,delivery:{ ...row.delivery,target_base:settings.baseId,target_sheet:settings.sheetId,fields_cipher:seal(this.key,JSON.stringify(fields),'delivery') } });
+    if (!row.delivery.target_base) this.write({ ...row,delivery:{ ...row.delivery,...operation,target_base:settings.baseId,target_sheet:settings.sheetId,fields_cipher:seal(this.key,JSON.stringify(fields),'delivery') } });
+    return this.deliveryView(this.getSubmission(row.id).delivery,row.id);
+  }
+  bindUpdateRecord(claimed, target) {
+    const row=this.getSubmission(claimed.id);
+    if(row.delivery.lease_token!==claimed.lease_token)throw new Error('DeliveryLeaseLost');
+    if(!row.delivery.record_id)this.write({...row,delivery:{...row.delivery,operation:'update',record_id:target.id,registration_created_at:target.createdAt}});
     return this.deliveryView(this.getSubmission(row.id).delivery,row.id);
   }
   failed(table, claimed, code, delay) {

@@ -2,7 +2,7 @@ import { defaultFields, dimensions } from './config.mjs';
 export class DeliveryError extends Error {
   constructor(code) { super(/^[A-Za-z0-9_.-]{1,100}$/.test(code) ? code : 'DingTalkRequestFailed'); }
 }
-export function dingFields(result, map = defaultFields, schema) {
+export function dingFields(result, map = defaultFields, schema, {assessmentOnly=false}={}) {
   if (typeof result.personality_type !== 'string' || !result.personality_type.trim()) throw new DeliveryError('MissingPersonalityType');
   if (typeof result.description !== 'string' || !result.description.trim()) throw new DeliveryError('MissingDescription');
   const metadata = (name, fallback) => {
@@ -11,7 +11,7 @@ export function dingFields(result, map = defaultFields, schema) {
     if (matches.length!==1) throw new DeliveryError('DingTalkFieldMissingOrAmbiguous');
     return matches[0];
   };
-  return Object.fromEntries(Object.entries(map).filter(([key])=>!['visitor_name','visitor_phone'].includes(key)||result[key]!==undefined).map(([key,name]) => {
+  return Object.fromEntries(Object.entries(map).filter(([key])=>key!=='updated_at'&&(!assessmentOnly||!['visitor_name','visitor_phone','created_at'].includes(key))&&(!['visitor_name','visitor_phone'].includes(key)||result[key]!==undefined)).map(([key,name]) => {
     let value=result[key];
     if (key in dimensions) {
       if (!Number.isInteger(value) || value<0 || value>100) throw new DeliveryError('InvalidScore');
@@ -51,7 +51,7 @@ export class DingtalkClient {
     if (typeof data.accessToken !== 'string' || !data.accessToken || !Number.isFinite(data.expireIn) || data.expireIn <= 0) throw new DeliveryError('InvalidTokenResponse');
     this.token={value:data.accessToken,expires:Date.now()+data.expireIn*900}; return this.token.value;
   }
-  async prepareFields(result) {
+  async fieldSchema() {
     const signal=AbortSignal.timeout(15000);
     const url=new URL(`${this.origin}/v1.0/notable/bases/${encodeURIComponent(this.settings.baseId)}/sheets/${encodeURIComponent(this.settings.sheetId)}/fields`);
     url.searchParams.set('operatorId',this.settings.operatorId);
@@ -64,7 +64,77 @@ export class DingtalkClient {
       }
     }
     if (!Array.isArray(data?.value)) throw new DeliveryError('InvalidFieldSchemaResponse');
-    return dingFields(result,this.settings.fields,data.value);
+    return data.value;
+  }
+  async prepareFields(result, options) { return dingFields(result,this.settings.fields,await this.fieldSchema(),options); }
+  async prepareRegistration(contact, createdAt) {
+    const map=this.settings.fields||defaultFields,schema=await this.fieldSchema();
+    for(const [key,type] of [['visitor_name','text'],['visitor_phone','telephone'],['created_at','date']]) {
+      const matches=schema.filter(f=>f.name===map[key]||f.id===map[key]);
+      if(matches.length!==1||matches[0].type!==type)throw new DeliveryError('DingTalkRegistrationFieldTypeChanged');
+    }
+    return {[map.visitor_name]:contact.visitor_name,[map.visitor_phone]:contact.visitor_phone,[map.created_at]:createdAt};
+  }
+  recordsUrl(base=this.settings.baseId,sheet=this.settings.sheetId) {
+    const url=new URL(`${this.origin}/v1.0/notable/bases/${encodeURIComponent(base)}/sheets/${encodeURIComponent(sheet)}/records`);
+    url.searchParams.set('operatorId',this.settings.operatorId);return url;
+  }
+  async findLatest(contact) {
+    const map=this.settings.fields||defaultFields,schema=await this.fieldSchema(),keys=['visitor_name','visitor_phone','created_at'];
+    const fields=Object.fromEntries(keys.map(key=>{const matches=schema.filter(f=>f.name===map[key]||f.id===map[key]);if(matches.length!==1)throw new DeliveryError('DingTalkFieldMissingOrAmbiguous');return [key,matches[0]];}));
+    const url=this.recordsUrl();url.pathname+='/list';let nextToken,latest,tied=false;const seen=new Set();
+    const signal=AbortSignal.timeout(45000);
+    do {
+      const page=await this.json(url,{maxResults:100,fieldIdOrNames:keys.map(k=>map[k]),...(nextToken?{nextToken}:{})},signal);
+      if(!Array.isArray(page.records))throw new DeliveryError('InvalidListResponse');
+      for(const row of page.records) {
+        const value=key=>row.fields?.[map[key]]??row.fields?.[fields[key].id];
+        if(value('visitor_name')!==contact.visitor_name||value('visitor_phone')!==contact.visitor_phone)continue;
+        const raw=value('created_at'),time=typeof raw==='number'?raw:typeof raw==='string'&&raw.trim()?Number(raw):NaN;
+        if(!Number.isSafeInteger(time)||time<=0)throw new DeliveryError('DingTalkRegistrationTimeInvalid');
+        if(typeof row.id!=='string'||!row.id)throw new DeliveryError('InvalidListResponse');
+        if(!latest||time>latest.createdAt){latest={id:row.id,createdAt:time};tied=false;}
+        else if(time===latest.createdAt&&row.id!==latest.id)tied=true;
+      }
+      if(!page.hasMore)break;
+      if(typeof page.nextToken!=='string'||!page.nextToken||seen.has(page.nextToken))throw new DeliveryError('InvalidPagination');
+      nextToken=page.nextToken;seen.add(nextToken);
+    }while(true);
+    if(!latest)throw new DeliveryError('DingTalkRegistrationNotFound');
+    if(tied)throw new DeliveryError('DingTalkLatestRecordAmbiguous');
+    return latest;
+  }
+  async ensurePersonalityOption(name) {
+    if(typeof name!=='string'||!name.trim())throw new DeliveryError('MissingPersonalityType');
+    const map=this.settings.fields||defaultFields,schema=await this.fieldSchema(),matches=schema.filter(f=>f.name===map.personality_type||f.id===map.personality_type);
+    if(matches.length!==1||matches[0].type!=='singleSelect')throw new DeliveryError('DingTalkPersonalityFieldTypeChanged');
+    const field=matches[0],choices=field.property?.choices??[];
+    if(!Array.isArray(choices))throw new DeliveryError('InvalidFieldSchemaResponse');
+    if(choices.some(choice=>choice.name===name))return;
+    const url=new URL(`${this.origin}/v1.0/notable/bases/${encodeURIComponent(this.settings.baseId)}/sheets/${encodeURIComponent(this.settings.sheetId)}/fields/${encodeURIComponent(field.id)}`);
+    url.searchParams.set('operatorId',this.settings.operatorId);
+    const data=await this.json(url,{name:field.name,property:{...field.property,choices:[...choices,{name}]}},AbortSignal.timeout(15000),true,'PUT');
+    if(data.id!==field.id)throw new DeliveryError('InvalidFieldUpdateResponse');
+    for(let attempt=0;attempt<3;attempt++){
+      const updated=(await this.fieldSchema()).find(f=>f.id===field.id)?.property?.choices;
+      if(Array.isArray(updated)&&updated.some(c=>c.name===name)&&choices.every(c=>updated.some(next=>next.id===c.id&&next.name===c.name)))return;
+      if(attempt<2)await new Promise(resolve=>setTimeout(resolve,300*(attempt+1)));
+    }
+    throw new DeliveryError('DingTalkPersonalityOptionNotConfirmed');
+  }
+  async update(task) {
+    if(typeof task.record_id!=='string'||!task.record_id)throw new DeliveryError('MissingTargetRecord');
+    const fields=JSON.parse(task.fields_json),map=this.settings.fields||defaultFields;
+    for(const key of ['visitor_name','visitor_phone','created_at','updated_at'])delete fields[map[key]];
+    if(fields[map.personality_type]!==undefined)await this.ensurePersonalityOption(fields[map.personality_type]);
+    const signal=AbortSignal.timeout(45000),url=this.recordsUrl(task.target_base,task.target_sheet);
+    for(let attempt=0;attempt<2;attempt++) {
+      try {
+        const data=await this.json(url,{records:[{id:task.record_id,fields}]},signal,true,'PUT');
+        if(!Array.isArray(data.value)||data.value.length!==1||data.value[0]?.id!==task.record_id)throw new DeliveryError('InvalidUpdateResponse');
+        return task.record_id;
+      }catch(e){if(!attempt&&['Unauthorized','InvalidAuthentication','InvalidAccessToken','AccessToken.Expired'].includes(e.message)){this.token=null;continue;}throw e;}
+    }
   }
   async recover(url, expected, signal) {
     url = new URL(url); url.pathname += '/list'; url.searchParams.delete('clientToken');
@@ -100,6 +170,7 @@ export class DingtalkClient {
     const clientToken=/^[0-9a-f]{32}$/i.test(rawToken) ? rawToken.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,'$1-$2-$3-$4-$5') : rawToken;
     url.searchParams.set('operatorId',this.settings.operatorId); url.searchParams.set('clientToken',clientToken);
     const fields = JSON.parse(task.fields_json);
+    delete fields[(this.settings.fields||defaultFields).updated_at];
     for (let attempt=0;attempt<2;attempt++) {
       try {
         const data = await this.json(url,{records:[{fields}]},signal);

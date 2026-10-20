@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {Portal,PortalError,readCookie} from './portal.mjs';
 import {AuthError} from './hr-auth.mjs';
+import {RegistrationError} from './registrations.mjs';
 import { validResultId } from './report.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const assets = Object.fromEntries(['index.html','shell.js','shell.css','bridge.js'].map(name => [name,readFileSync(new URL(`../public/${name}`,import.meta.url))]));
@@ -55,7 +56,7 @@ export function parseUpstreamRejection(bytes,status) {
   return result;
 }
 export function createApp({ config,store,worker,fetcher=fetch,portalAuth }) {
-  const inFlight=new Map(),portal=config.portalEnabled?new Portal(store,config,{fetcher,auth:portalAuth}):null;
+  const inFlight=new Map(),portal=config.portalEnabled?new Portal(store,config,{fetcher,auth:portalAuth,registrations:worker.registrations}):null;
   const server=createServer(async(req,res) => {
     try {
       const fallback=`http://${req.headers.host}`;
@@ -157,7 +158,7 @@ export function createApp({ config,store,worker,fetcher=fetch,portalAuth }) {
         if (!res.headersSent) json(res,502,{error:'UpstreamUnavailable'});else res.destroy();
       } finally { release?.();if(submissionId)inFlight.delete(submissionId); }
     } catch(e) {
-      if(e instanceof PortalError||e instanceof AuthError){
+      if(e instanceof PortalError||e instanceof AuthError||e instanceof RegistrationError){
         if(req.url?.startsWith('/auth/')){res.writeHead(303,{location:'/?login='+encodeURIComponent(e.message),'cache-control':'no-store','referrer-policy':'no-referrer'});res.end();return;}
         return json(res,e.status,{error:e.message});
       }

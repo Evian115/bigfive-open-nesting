@@ -35,7 +35,7 @@ test('只去重同一次提交，不合并相同分数的独立测评；回执�
  for(let n=0;n<2;n++)store.capture(store.claim('submissions'),report);
  assert.equal(store.all().length,2);assert.notEqual(store.getSubmission(a.id).delivery.client_token,store.getSubmission(b.id).delivery.client_token);
  store=new Store(store.directory);assert.equal(store.status(a.id,a.session).saved,true);
- assert.equal(store.session(a.session),true);assert.equal(store.session(a.session.slice(0,-1)+'0'),false);
+ assert.equal(store.session(a.session),true);assert.equal(store.session(a.session.slice(0,-1)+(a.session.endsWith('0')?'1':'0')),false);
  assert.equal(store.status(a.id,store.newSession()),null);
 });
 test('超时未确认原站回执不会盲目重发；原站明确拒绝后允许同一提交重试',t=>{

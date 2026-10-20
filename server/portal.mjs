@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {atomicJson,readJson,seal,unseal,digest} from './secure-files.mjs';
 import {HrAuth,AuthError} from './hr-auth.mjs';
+import {Registrations} from './registrations.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const files=Object.fromEntries(['hr.html','hr.js','hr.css','invitation.html','invitation.js'].map(name=>[name,readFileSync(new URL('../public/'+name,import.meta.url))]));
 export const readCookie=(req,name)=>(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(name+'='))?.slice(name.length+1);
@@ -14,7 +15,7 @@ export function validateContact(input){
  return {visitor_name:name,visitor_phone:phone};
 }
 export class Portal {
- constructor(store,config,{fetcher=fetch,auth}={}){this.store=store;this.config=config;this.auth=auth||new HrAuth(config,{fetcher});}
+ constructor(store,config,{fetcher=fetch,auth,registrations}={}){this.store=store;this.config=config;this.auth=auth||new HrAuth(config,{fetcher});this.registrations=registrations||new Registrations(store,config,{fetcher});}
  path(kind,id){if(!uuid.test(id))throw new PortalError('InvalidIdentifier');return join(this.store.directory,kind,id+'.json');}
  get(kind,id){return readJson(this.path(kind,id));} put(kind,row){return atomicJson(this.path(kind,row.id),row);}
  cookie(res,name,value,secure,maxAge){const previous=res.getHeader('set-cookie')||[];res.setHeader('set-cookie',[...(Array.isArray(previous)?previous:[previous]),`${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure?'; Secure':''}`]);}
@@ -44,6 +45,7 @@ export class Portal {
  open(token,session){
   let data;try{if(typeof token!=='string'||token.length>4096)throw new Error();data=unseal(this.store.key,token,'invite');}catch{throw new PortalError('InvitationInvalid',410);}
   const inv=this.get('invitations',data.id);if(!inv||inv.expiresAt!==data.expiresAt)throw new PortalError('InvitationInvalid',410);
+  if(inv.registration&&inv.registration.state!=='synced')throw new PortalError('RegistrationPending',409);
   this.sync(inv);if(inv.resultId||inv.closedAt)throw new PortalError('InvitationCompleted',410);
   if(inv.expiresAt<=Date.now())throw new PortalError('InvitationExpired',410);
   if(inv.claimedSession&&inv.claimedSession!==digest(session))throw new PortalError('InvitationInUse',409);
@@ -111,9 +113,13 @@ export class Portal {
   if(path==='/_nest/hr/invitations'&&req.method==='POST'){
    this.sameOrigin(req,origin);const user=await this.hr(req,true);if(!user)throw new AuthError('LoginRequired');
    if(req.headers['x-nesting-csrf']!==digest(readCookie(req,'nest_hr')+':csrf'))throw new AuthError('InvalidCsrf',403);
-   const contact=validateContact(await this.input(req)),issued=this.createInvitation(contact,user.unionId);
-   return this.json(res,201,{url:(this.config.publicOrigin||origin)+'/i#'+issued.token,expiresAt:issued.expiresAt});
+   const input=await this.input(req),contact=validateContact(input),issued=this.registrations.create(contact,user.unionId,input.id);
+   await this.registrations.process(issued.id);
+   const result=this.registrations.response(issued.id,user.unionId,this.config.publicOrigin||origin);
+   return this.json(res,result.state==='synced'?201:202,result);
   }
+  const registrationId=path.match(/^\/_nest\/hr\/invitations\/([0-9a-f-]{36})$/)?.[1];
+  if(registrationId&&req.method==='GET'){const user=await this.hr(req);if(!user)throw new AuthError('LoginRequired');return this.json(res,200,this.registrations.response(registrationId,user.unionId,this.config.publicOrigin||origin));}
   if(path==='/_nest/hr/logout'&&req.method==='POST'){
    this.sameOrigin(req,origin);const token=readCookie(req,'nest_hr'),id=token?.split('.')[0];if(uuid.test(id||'')){const user=this.get('hr-sessions',id);if(user?.tokenHash===digest(token)){user.expiresAt=0;this.put('hr-sessions',user);}}
    this.cookie(res,'nest_hr','',secureCookie,0);return this.json(res,200,{ok:true});
