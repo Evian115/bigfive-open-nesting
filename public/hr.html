@@ -25,7 +25,7 @@
       <h2>来访者登记</h2>
       <p class="muted">姓名和电话先保存到钉钉，再生成测评链接。</p>
       <label for="name">姓名 <span>*</span></label>
-      <input id="name" name="name" maxlength="80" placeholder="请输入来访者姓名" autocomplete="off" required>
+      <input id="name" name="name" maxlength="80" pattern="\p{Unified_Ideograph}{1,80}" title="姓名只能填写中文汉字，不能包含空格、字母、数字或符号" placeholder="请输入纯中文姓名" autocomplete="off" required>
       <label for="phone">联系电话 <span>*</span></label>
       <div class="phone-field"><span>+86</span><input id="phone" name="phone" type="tel" inputmode="tel" maxlength="20" placeholder="请输入 11 位手机号" autocomplete="off" required></div>
       <button id="create" class="primary" type="submit">生成专属测评链接 <span>→</span></button>
