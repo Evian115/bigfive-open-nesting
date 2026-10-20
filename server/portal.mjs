@@ -2,7 +2,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {atomicJson,readJson,seal,unseal,digest} from './secure-files.mjs';
-import {HrAuth,AuthError} from './hr-auth.mjs';
+import {HrAuth,AuthError,safeAvatarUrl} from './hr-auth.mjs';
 import {Registrations} from './registrations.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const files=Object.fromEntries(['hr.html','hr.js','hr.css','invitation.html','invitation.js'].map(name=>[name,readFileSync(new URL('../public/'+name,import.meta.url))]));
@@ -20,14 +20,13 @@ export class Portal {
  get(kind,id){return readJson(this.path(kind,id));} put(kind,row){return atomicJson(this.path(kind,row.id),row);}
  cookie(res,name,value,secure,maxAge){const previous=res.getHeader('set-cookie')||[];res.setHeader('set-cookie',[...(Array.isArray(previous)?previous:[previous]),`${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure?'; Secure':''}`]);}
  json(res,status,value){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));return true;}
- page(res,file,status=200){res.writeHead(status,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"});res.end(files[file]);return true;}
+ page(res,file,status=200){res.writeHead(status,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"});res.end(files[file]);return true;}
  invalid(res){res.writeHead(410,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer'});res.end('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>测评链接已失效</title><body><h2>测评链接已失效</h2><p>本次测评已完成或链接已过期。如需重新测评，请联系人事生成新的链接。</p></body></html>');return true;}
  sameOrigin(req,origin){if(req.headers.origin!==origin)throw new PortalError('CrossOriginRequest',403);}
  async input(req){let size=0,parts=[];for await(const part of req){size+=part.length;if(size>16384)throw new PortalError('BodyTooLarge',413);parts.push(part);}try{return JSON.parse(Buffer.concat(parts).toString());}catch{throw new PortalError('InvalidJson');}}
- async hr(req,refresh=false){
+ async hr(req){
   const token=readCookie(req,'nest_hr'),id=token?.split('.')[0];if(!uuid.test(id||''))return null;
   const session=this.get('hr-sessions',id);if(!session||session.tokenHash!==digest(token)||session.expiresAt<=Date.now()||session.tenantKey!==this.auth.tenantKey)return null;
-  if(refresh||Date.now()-session.verifiedAt>300000){const member=await this.auth.member(session.unionId);if(member.tenantKey!==session.tenantKey)throw new AuthError('NotCompanyMember',403);session.verifiedAt=Date.now();this.put('hr-sessions',session);}
   return session;
  }
  createInvitation(contact,owner,now=Date.now()){
@@ -102,16 +101,16 @@ export class Portal {
    const row=this.get('oauth-states',id);if(!row||row.usedAt||row.expiresAt<=Date.now()||row.hash!==digest(state))throw new AuthError('InvalidOAuthState');
    row.usedAt=Date.now();this.put('oauth-states',row);this.cookie(res,'nest_oauth','',secureCookie,0);
    const code=url.searchParams.get('authCode')||url.searchParams.get('code');if(!code||code.length>2048)throw new AuthError('OAuthCancelled');
-   const member=await this.auth.exchange(code);if(member.tenantKey!==this.auth.tenantKey)throw new AuthError('NotCompanyMember',403);
+   const member=await this.auth.exchange(code);if(member.tenantKey!==this.auth.tenantKey)throw new AuthError('InvalidUserIdentity',403);
    const sid=randomUUID(),token=sid+'.'+randomBytes(32).toString('base64url');
    this.put('hr-sessions',{id:sid,tokenHash:digest(token),...member,createdAt:Date.now(),verifiedAt:Date.now(),expiresAt:Date.now()+12*3600000});
    this.cookie(res,'nest_hr',token,secureCookie,12*3600);res.writeHead(303,{location:this.config.publicOrigin+'/','cache-control':'no-store','referrer-policy':'no-referrer'});res.end();return true;
   }
   if(path==='/_nest/hr/session'&&req.method==='GET'){
-   const user=await this.hr(req);return this.json(res,200,user?{authenticated:true,name:user.name,csrf:digest(readCookie(req,'nest_hr')+':csrf')}:{authenticated:false,configured:this.auth.configured});
+   const user=await this.hr(req);return this.json(res,200,user?{authenticated:true,name:user.name,avatarUrl:safeAvatarUrl(user.avatarUrl),csrf:digest(readCookie(req,'nest_hr')+':csrf')}:{authenticated:false,configured:this.auth.configured});
   }
   if(path==='/_nest/hr/invitations'&&req.method==='POST'){
-   this.sameOrigin(req,origin);const user=await this.hr(req,true);if(!user)throw new AuthError('LoginRequired');
+   this.sameOrigin(req,origin);const user=await this.hr(req);if(!user)throw new AuthError('LoginRequired');
    if(req.headers['x-nesting-csrf']!==digest(readCookie(req,'nest_hr')+':csrf'))throw new AuthError('InvalidCsrf',403);
    const input=await this.input(req),contact=validateContact(input),issued=this.registrations.create(contact,user.unionId,input.id);
    await this.registrations.process(issued.id);

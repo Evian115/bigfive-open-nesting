@@ -8,7 +8,7 @@
 
 ## 人事登记与专属邀请
 
-当前默认入口为人事登录/登记页。使用现有企业内部应用完成钉钉 OAuth 登录，后端通过本企业通讯录核验内部、有效员工；不需要 CorpId。详见 [钉钉登录配置指引](docs/dingtalk-login-setup.md)。
+当前默认入口为人事登录/登记页。使用现有应用完成钉钉 OAuth 登录；不再额外校验企业成员、在职状态或所属部门，也不需要 CorpId。登录后卡片左上角显示钉钉头像与昵称，头像缺失或加载失败时显示姓名首字。已有旧登录缓存若没有头像，退出后重新登录即可获取。详见 [钉钉登录配置指引](docs/dingtalk-login-setup.md)。
 
 人事登记纯中文汉字姓名（不能包含任何空格、字母、数字或符号）和中国大陆11位手机号（均必填，手机号支持 +86）后，生成完整、唯一的 `/i#随机加密令牌` 链接。令牌和本地暂存联系人采用 AES-256-GCM 加密，有效期从生成开始72小时；来访者不需要登录或再填资料。仅打开链接不消耗测评；开始后绑定原浏览器，未完成时可刷新继续。不同邀请的原站答案缓存相互隔离。
 
@@ -172,6 +172,6 @@ npm run probe
 
 验证详情见 `docs/verification.md`。浏览器脚本需可用的 Playwright 模块与 Edge；可通过第三个参数或 `PLAYWRIGHT_MODULE` 指定模块路径。真实测试使用独立 `18082` 服务和 `test-results/live-state/`，不指向正式服务。
 
-自动测试覆盖：报告身份与分数校验、独立测评与同次重试、并发提交、跨会话隔离、原站 429、响应丢失、重启续传、租约恢复、目标变更、钉钉重复 clientToken 核验、token 刷新及异常成功响应。已通过真实原表字段核验、十字段写入/读回与重复 clientToken 恢复测试，临时测试行已清理。
+自动测试覆盖：报告身份与分数校验、独立测评与同次重试、并发提交、跨会话隔离、原站 429、响应丢失、重启续传、租约恢复、目标变更、钉钉重复 clientToken 核验、token 刷新及异常成功响应。已通过真实原表字段核验、十字段写入/读回与重复 clientToken 恢复测试，测试行按当前约定保留，供核验。
 
 参考：[原站](https://bigfivepersonality.me/zh)、[钉钉新增记录 API](https://open.dingtalk.com/document/development/api-notable-insertrecords)、[列出多行记录 API](https://open.dingtalk.com/document/development/api-notable-listrecords)、[更新多行记录 API](https://open.dingtalk.com/document/development/api-notable-updaterecords)。
