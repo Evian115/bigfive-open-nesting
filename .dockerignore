@@ -1,6 +1,9 @@
-.git
-.env
-.env.*
-node_modules
-data
-test-results
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!server/
+!server/**
+!public/
+!public/**
