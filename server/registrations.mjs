@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {atomicJson,readJson,seal,unseal} from './secure-files.mjs';
 import {DingtalkClient} from './dingtalk.mjs';
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const registrationOrder=(a,b)=>a.createdAt-b.createdAt||a.id.localeCompare(b.id);
 export class RegistrationError extends Error {constructor(code,status=409){super(code);this.status=status;}}
 export class Registrations {
   constructor(store,config,{fetcher=fetch,dingClient}={}) {
@@ -13,6 +14,7 @@ export class Registrations {
   get(id){return readJson(this.path(id));}
   put(row){return atomicJson(this.path(row.id),row);}
   all(){const dir=join(this.store.directory,'invitations');return existsSync(dir)?readdirSync(dir).filter(n=>n.endsWith('.json')).map(n=>readJson(join(dir,n))):[];}
+  needsLegacyRegistration(inv){return inv.expiresAt>Date.now()||!!(inv.submissionId&&['accepted','captured'].includes(this.store.getSubmission(inv.submissionId)?.state));}
   create(contact,owner,id=randomUUID()) {
     const existing=this.get(id);
     if(existing){if(existing.owner!==owner||!existing.contact_cipher||JSON.stringify(unseal(this.store.key,existing.contact_cipher,'contact'))!==JSON.stringify(contact))throw new RegistrationError('RegistrationConflict');return existing;}
@@ -44,8 +46,19 @@ export class Registrations {
       if(!this.ding)throw new Error('DingTalkNotConfigured');
       const settings=this.config.dingtalk;
       if(task.target_base&&(task.target_base!==settings.baseId||task.target_sheet!==settings.sheetId))throw new Error('DingTalkTargetChanged');
+      const contact=unseal(this.store.key,inv.contact_cipher,'contact');
+      // Only one unconfirmed insert per contact/target: otherwise two lost receipts
+      // can leave identical remote rows that neither clientToken can distinguish.
+      const prior=this.all().some(other=>{
+        if(other.id===id||!other.contact_cipher||other.registration?.state==='synced')return false;
+        if(!other.registration&&!this.needsLegacyRegistration(other))return false;
+        if(!other.registration?.fields_cipher&&registrationOrder(other,inv)>=0)return false;
+        if(other.registration?.target_base&&(other.registration.target_base!==settings.baseId||other.registration.target_sheet!==settings.sheetId))return false;
+        const previous=unseal(this.store.key,other.contact_cipher,'contact');
+        return previous.visitor_name===contact.visitor_name&&previous.visitor_phone===contact.visitor_phone;
+      });
+      if(prior)return inv;
       if(!task.fields_cipher) {
-        const contact=unseal(this.store.key,inv.contact_cipher,'contact');
         const fields=await this.ding.prepareRegistration(contact);
         const priorIds=this.ding.registrationBaseline?await this.ding.registrationBaseline(contact):null;
         inv=this.get(id);task={...inv.registration,...(priorIds?{prior_ids_cipher:seal(this.store.key,priorIds,'registration-recovery')}:{}),target_base:settings.baseId,target_sheet:settings.sheetId,fields_cipher:seal(this.store.key,JSON.stringify(fields),'registration')};
@@ -66,7 +79,12 @@ export class Registrations {
   }
   async tick() {
     if(!this.config.portalEnabled)return;
-    const next=this.all().find(inv=>inv.contact_cipher&&(!inv.registration?inv.expiresAt>Date.now():inv.registration.state!=='synced'&&inv.registration.next_attempt_at<=Date.now()));
-    if(next)await this.process(next.id);
+    const candidates=this.all().filter(inv=>inv.contact_cipher&&(!inv.registration?this.needsLegacyRegistration(inv):inv.registration.state!=='synced'&&inv.registration.next_attempt_at<=Date.now())).sort(registrationOrder);
+    for(const next of candidates){
+      const after=await this.process(next.id);
+      // A later registration of the same contact may be waiting on its predecessor.
+      // Continue scanning so that unrelated contacts can still make progress.
+      if(after.registration?.state==='synced'||after.registration?.attempts!==next.registration?.attempts)break;
+    }
   }
 }

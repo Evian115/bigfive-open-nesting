@@ -161,3 +161,38 @@ test('登记字段元数据读取失败或电话类型不符时不创建行、�
  assert.deepEqual(await ding.prepareRegistration(contact),{姓名:contact.visitor_name,电话:contact.visitor_phone});
  fields=schema.filter(f=>f.name!=='写入时间');await assert.rejects(()=>ding.prepareRegistration(contact),/RegistrationFieldTypeChanged/);
  });
+
+test('不同账号同时登记同一联系人且新增回执均丢失时，逐条恢复各自记录而不永久卡住',async t=>{
+ const {store,settings}=setup(t),r=remote(settings),transport=r.client.fetcher;let drops=0;
+ r.client.fetcher=async(url,options)=>{const reply=await transport(url,options);if(options.method==='POST'&&new URL(url).pathname.endsWith('/records')&&reply.ok&&drops<2){drops++;throw new Error('LostRegistrationReceipt');}return reply;};
+ const queue=new Registrations(store,settings,{dingClient:r.client}),a=queue.create(contact,'hr-a'),b=queue.create(contact,'hr-b');
+ await Promise.all([queue.process(a.id),queue.process(b.id)]);
+ assert.equal(r.rows.length,1);assert.equal(queue.get(a.id).registration.state,'retrying');assert.equal(queue.get(b.id).registration.state,'pending');
+ await pause();await queue.process(a.id);assert.equal(queue.get(a.id).registration.state,'synced');
+ await queue.process(b.id);assert.equal(queue.get(b.id).registration.state,'retrying');assert.equal(r.rows.length,2);
+ await pause();const restarted=new Registrations(new Store(store.directory),settings,{dingClient:r.client});await restarted.process(b.id);
+ assert.equal(restarted.get(b.id).registration.state,'synced');assert.equal(restarted.get(a.id).registration.remote_id,'row-1');assert.equal(restarted.get(b.id).registration.remote_id,'row-2');assert.equal(r.rows.length,2);
+ assert.notEqual(restarted.get(a.id).registration.client_token,restarted.get(b.id).registration.client_token);
+});
+
+test('同一联系人前序登记等待重试时不阻塞其他联系人登记',async t=>{
+ const {store,settings}=setup(t);settings.retryBaseMs=100000;
+ const r=remote(settings),queue=new Registrations(store,settings,{dingClient:r.client});
+ const a=queue.create(contact,'hr-a','11111111-1111-4111-8111-111111111111'),b=queue.create(contact,'hr-b','22222222-2222-4222-8222-222222222222'),c=queue.create({...contact,visitor_phone:'13800138000'},'hr-b','33333333-3333-4333-8333-333333333333');
+ r.dropInsert();await queue.process(a.id);await queue.process(b.id);assert.equal(queue.get(b.id).registration.state,'pending');
+ await queue.tick();assert.equal(queue.get(c.id).registration.state,'synced');assert.equal(queue.get(a.id).registration.state,'retrying');assert.equal(queue.get(b.id).registration.state,'pending');assert.equal(r.rows.length,2);
+ assert.equal(r.rows[1].fields.电话,'13800138000');
+});
+
+test('已过期且未提交的旧邀请不阻塞新登记，已经提交的旧邀请仍继续补登记',async t=>{
+ for(const submitted of [false,true]){
+  const {store,settings}=setup(t),r=remote(settings),queue=new Registrations(store,settings,{dingClient:r.client});
+  const old=queue.create(contact,'old-owner');delete old.registration;old.createdAt=Date.now()-74*3600000;old.expiresAt=Date.now()-1;
+  if(submitted)old.submissionId=capture(store,old);
+  queue.put(old);const current=queue.create(contact,'new-owner');
+  await queue.process(current.id);
+  if(submitted){assert.equal(queue.get(current.id).registration.state,'pending');await queue.tick();assert.equal(queue.get(old.id).registration.state,'synced');await queue.process(current.id);assert.equal(r.rows.length,2);}
+  else assert.equal(r.rows.length,1);
+  assert.equal(queue.get(current.id).registration.state,'synced');
+ }
+});

@@ -14,7 +14,7 @@ async function http(t,custom={}){
  return {...context,origin,request,registrations,get posts(){return posts;}};
 }
 const cookieFor=(response,name)=>response.headers.getSetCookie().find(x=>x.startsWith(name+'='))?.split(';')[0];
-async function login(ctx){const start=await ctx.request('/auth/dingtalk/start'),target=new URL(start.headers.get('location')),state=target.searchParams.get('state');const response=await ctx.request('/auth/dingtalk/callback?code=one-time-code&state='+encodeURIComponent(state),{headers:{cookie:cookieFor(start,'nest_oauth')}});assert.equal(response.status,303);const cookie=cookieFor(response,'nest_hr');assert.ok(cookie);const me=await(await ctx.request('/_nest/hr/session',{headers:{cookie}})).json();return {cookie,csrf:me.csrf};}
+async function login(ctx,code='one-time-code'){const start=await ctx.request('/auth/dingtalk/start'),target=new URL(start.headers.get('location')),state=target.searchParams.get('state');const response=await ctx.request('/auth/dingtalk/callback?code='+encodeURIComponent(code)+'&state='+encodeURIComponent(state),{headers:{cookie:cookieFor(start,'nest_oauth')}});assert.equal(response.status,303);const cookie=cookieFor(response,'nest_hr');assert.ok(cookie);const me=await(await ctx.request('/_nest/hr/session',{headers:{cookie}})).json();return {cookie,csrf:me.csrf};}
 async function issue(ctx,user,name='测试来访者',phone='13800138000'){const response=await ctx.request('/_nest/hr/invitations',{method:'POST',headers:{origin:ctx.origin,cookie:user.cookie,'x-nesting-csrf':user.csrf,'content-type':'application/json'},body:JSON.stringify({name,phone})});assert.equal(response.status,201);return (await response.json()).url.split('#')[1];}
 async function open(ctx,token){const response=await ctx.request('/i'),cookie=cookieFor(response,'nest_session');const result=await ctx.request('/_nest/invitations/open',{method:'POST',headers:{origin:ctx.origin,cookie,'content-type':'application/json'},body:JSON.stringify({token})});return {cookie,response:result,...await result.json()};}
 const input={answers:Array(50).fill(3),locale:'zh',startedAt:100,finishedAt:200};
@@ -145,4 +145,21 @@ test('JSON为null、数组或原始值时返回400，不创建登记或占用邀
   assert.equal(submission.status,400);
  }
  assert.equal(ctx.registrations.all().length,count);assert.equal(ctx.store.all().length,0);assert.equal(ctx.posts,0);
+});
+
+test('两个不同账号同时登记20人并各重试三次，只建20行且不能查询或覆盖对方邀请',async t=>{
+ const rows=[],calls=new Map();
+ const ctx=await http(t,{auth:{...auth,exchange:async code=>({...await auth.exchange(),unionId:code})},dingClient:{
+  prepareRegistration:async contact=>{await new Promise(resolve=>setImmediate(resolve));return {姓名:contact.visitor_name,电话:contact.visitor_phone};},
+  insert:async task=>{calls.set(task.client_token,(calls.get(task.client_token)||0)+1);await new Promise(resolve=>setImmediate(resolve));const row={id:'concurrent-'+task.client_token,fields:JSON.parse(task.fields_json)};rows.push(row);return row.id;}
+ }});
+ const users=await Promise.all([login(ctx,'hr-a'),login(ctx,'hr-b')]),symbols=['甲','乙','丙','丁','戊','己','庚','辛','壬','癸'];
+ const jobs=Array.from({length:20},(_,i)=>({id:randomUUID(),name:'并发访客'+symbols[Math.floor(i/10)]+symbols[i%10],phone:String(13900000000+i),user:users[i%2],owner:i%2?'hr-b':'hr-a'}));
+ const post=(job,user=job.user)=>ctx.request('/_nest/hr/invitations',{method:'POST',headers:{origin:ctx.origin,cookie:user.cookie,'x-nesting-csrf':user.csrf,'content-type':'application/json'},body:JSON.stringify({id:job.id,name:job.name,phone:job.phone})});
+ await Promise.all(jobs.flatMap(job=>Array.from({length:3},async()=>{const reply=await post(job);assert.equal(reply.status,201);assert.equal((await reply.json()).id,job.id);})));
+ assert.equal(rows.length,20);assert.equal(calls.size,20);assert.ok([...calls.values()].every(count=>count===1));
+ for(const job of jobs){const inv=ctx.registrations.get(job.id),row=rows.find(item=>item.id===inv.registration.remote_id);assert.equal(inv.owner,job.owner);assert.deepEqual(row.fields,{姓名:job.name,电话:job.phone});}
+ const first=jobs[0],other=users[1];
+ assert.equal((await ctx.request('/_nest/hr/invitations/'+first.id,{headers:{cookie:other.cookie}})).status,404);
+ assert.equal((await post(first,other)).status,409);assert.equal(rows.length,20);
 });
