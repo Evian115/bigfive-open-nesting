@@ -21,6 +21,9 @@ h2{font-size:24px;font-weight:600;line-height:1.4;margin:0 0 10px}
 a:focus-visible,button:focus-visible{outline:3px solid #9abaff;outline-offset:4px}
 .footnote{text-align:center;color:#8290a3;font-size:12px;line-height:1.8;margin:18px 0 0}
 #account{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:13px;padding-bottom:18px;margin-bottom:24px;border-bottom:1px solid #edf0f4}
+.account-profile{display:flex;align-items:center;gap:10px;min-width:0}
+.account-avatar{width:36px;height:36px;flex-shrink:0;border-radius:50%;object-fit:cover;background:#eaf2ff}
+.avatar-fallback{display:grid;place-items:center;color:#2563eb;font-size:16px;font-weight:600}
 #account-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .quiet{flex-shrink:0;border:0;background:none;color:#6c7b91;font-size:12px;padding:4px 0}
 label{display:block;font-size:13px;color:#435167;margin:23px 0 10px}
@@ -28,10 +31,6 @@ label span{color:#e25656}
 input,textarea{border:1px solid #dce2eb;border-radius:7px;background:#fff;width:100%;padding:13px;color:#25364c;outline:none;font-size:14px}
 input:focus,textarea:focus{border-color:#6d9af5;box-shadow:0 0 0 3px #2563eb0c}
 input::placeholder{color:#a2adbc}
-.phone-field{display:flex;align-items:center;gap:10px;border:1px solid #dce2eb;border-radius:7px;padding-left:13px}
-.phone-field:focus-within{border-color:#6d9af5;box-shadow:0 0 0 3px #2563eb0c}
-.phone-field>span{font-size:13px;color:#8290a3;white-space:nowrap}
-.phone-field input{border:0;min-width:0;box-shadow:none}
 .primary{margin-top:26px;padding:14px 16px;width:100%;border:0;border-radius:7px;background:#2563eb;color:#fff;font-size:14px;display:flex;align-items:center;justify-content:space-between}
 .primary:hover{background:#1e55ce}
 .primary:disabled{opacity:.55;cursor:wait}
