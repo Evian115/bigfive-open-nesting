@@ -1,5 +1,7 @@
 # 项目约定
 
+- GitHub 仓库：[Evian115/bigfive-open-nesting](https://github.com/Evian115/bigfive-open-nesting)。
+
 - 本项目为原站嵌套代理服务，与相邻 bigfive-open 项目独立。
 - 不复制题库、不重新计分，五维分数只读取原站已生成且身份匹配的报告。
 - 用户已取消本地测评数据库。仅用持久任务文件支持失败重试和去重；钉钉确认成功后移除分数、人格类型、描述和字段快照。
