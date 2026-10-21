@@ -99,7 +99,7 @@
 
 ## 花生壳 HTTPS 提交与自动作答脚本（2026-10-20）
 
-用户通过 `https://test.example.com` 映射8082后无法生成正式类型。带有效会话、外网 Origin 的安全探测在修复前返回 `403 SameOriginSessionRequired`，请求尚未进入原站提交流程；与 PUBLIC_ORIGIN 留空、服务把 HTTPS 隧道视为 HTTP 来源一致。原站此时可能展示只有分数图、没有正式类型的本地备用结果，该结果没有可回传的正式报告 ID。
+用户通过外网 HTTPS 域名映射8082后无法生成正式类型（公开文档用 `https://test.example.com` 代指实际入口）。带有效会话、外网 Origin 的安全探测在修复前返回 `403 SameOriginSessionRequired`，请求尚未进入原站提交流程；与 PUBLIC_ORIGIN 留空、服务把 HTTPS 隧道视为 HTTP 来源一致。原站此时可能展示只有分数图、没有正式类型的本地备用结果，该结果没有可回传的正式报告 ID。
 
 已配置外网 PUBLIC_ORIGIN 和 Secure Cookie，并增加显式 ADDITIONAL_ORIGINS 保留 localhost/127.0.0.1 的8082调试入口。只接受已配置来源，不信任任意 X-Forwarded-* 头；HTTP 本机与 HTTPS 外网各使用对应 Cookie 属性。新增两项 HTTP 回归验证外网提交、HTTPS 链接改写、本机来源和伪造来源拒绝，43项自动测试通过。
 

@@ -22,7 +22,7 @@ https://test.example.com/auth/dingtalk/callback
 https://test.example.com/
 ```
 
-当前花生壳地址仅用于临时测试，也可以登记为测试回调。以后改用正式域名时，后台回调与 `.env` 的 PUBLIC_ORIGIN 都要更新；不需要现在就购买或确定正式域名。
+以上为示例域名，请替换为实际入口。实际域名仅在本机 `.env` 和钉钉后台配置，不提交到 GitHub；文档与截图继续使用示例地址。临时测试域名也可以登记为测试回调；以后改用正式域名时，后台回调与 `.env` 的 PUBLIC_ORIGIN 都要更新。
 
 ## 3. 申请所需权限
 

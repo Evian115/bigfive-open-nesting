@@ -52,7 +52,7 @@ docker compose ps
 
 ## 花生壳外网访问
 
-当前外网入口：<https://test.example.com/>，花生壳转发到本机8082。后端配置：
+以 `https://test.example.com` 为例，花生壳转发到本机8082。将示例域名替换为实际地址，实际地址仅填写在后端 `.env` 中，不提交到仓库：
 
 ```dotenv
 PUBLIC_ORIGIN=https://test.example.com
